@@ -27,10 +27,24 @@ try
 
     // Lese alle wichtigen Konfigurationswerte aus und logge sie
     var backupType = config.Get("DEFAULT", "BACKUP_TYPE")!;
-    var sourceFolder = config.Get("DEFAULT", "SOURCE_FOLDER");
-    if (string.IsNullOrWhiteSpace(sourceFolder))
+    
+    // Unterstütze mehrere Quellordner
+    var sourceFolderString = config.Get("DEFAULT", "SOURCE_FOLDERS") ?? config.Get("DEFAULT", "SOURCE_FOLDER");
+    if (string.IsNullOrWhiteSpace(sourceFolderString))
     {
-        Log.Error("Fehler: SOURCE_FOLDER ist nicht gesetzt");
+        Log.Error("Fehler: Weder SOURCE_FOLDERS noch SOURCE_FOLDER ist gesetzt");
+        return;
+    }
+    
+    // Parsen der Quellordner aus der Konfiguration (kommagetrennte Liste)
+    var sourceFolders = sourceFolderString.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries)
+        .Select(folder => folder.Trim())
+        .Where(folder => !string.IsNullOrWhiteSpace(folder))
+        .ToList();
+    
+    if (sourceFolders.Count == 0)
+    {
+        Log.Error("Fehler: Keine gültigen Quellordner angegeben");
         return;
     }
     
@@ -65,7 +79,21 @@ try
     // Logge die Konfigurationsparameter übersichtlich
     Log.Information("Konfigurationsparameter:");
     Log.Information("  Backend-Typ: {BackupType}", backupType);
-    Log.Information("  Quellverzeichnis: {SourceFolder}", sourceFolder);
+    
+    // Zeige alle Quellordner im Log
+    if (sourceFolders.Count == 1)
+    {
+        Log.Information("  Quellverzeichnis: {SourceFolder}", sourceFolders[0]);
+    }
+    else
+    {
+        Log.Information("  Quellverzeichnisse:");
+        foreach (var folder in sourceFolders)
+        {
+            Log.Information("    - {SourceFolder}", folder);
+        }
+    }
+    
     Log.Information("  Metadaten-Datei: {MetadataFile}", metadataFile);
     Log.Information("  Parallele Uploads: {ParallelUploads}", parallelUploads);
     Log.Information("  Safe-Mode: {SafeMode}", safeMode);
@@ -102,7 +130,7 @@ try
 
     var backupJob = new BackupJob(
         backend,
-        sourceFolder,
+        sourceFolders,
         metadataFile,
         parallelUploads,
         safeMode,

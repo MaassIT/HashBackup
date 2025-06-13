@@ -2,7 +2,7 @@ namespace HashBackup;
 
 public class BackupJob(
     IStorageBackend backend,
-    string sourceFolder,
+    IEnumerable<string> sourceFolders,
     string metadataFile,
     int parallelUploads,
     bool safeMode,
@@ -14,9 +14,9 @@ public class BackupJob(
     IEnumerable<string>? configDoku = null,
     IEnumerable<string>? ignoredFiles = null)
 {
-    public async Task RunAsync()
+    public async Task RunAsync(CancellationToken ct = default)
     {
-        var hashes = safeMode ? await backend.FetchHashesAsync() : new Dictionary<string, long>();
+        var hashes = safeMode ? await backend.FetchHashesAsync(ct) : new Dictionary<string, long>();
         var uploadQueue = new ConcurrentQueue<(string filePath, string destPath, string fileHash, int tryCount)>();
         var filesIndiziert = 0;
         var filesToUpload = 0;
@@ -36,7 +36,7 @@ public class BackupJob(
         else
         {
             // Standard-Konfigurationsdokumentation erstellen
-            csvLines.Add($"SOURCE_FOLDER={sourceFolder}");
+            csvLines.Add($"SOURCE_FOLDER={string.Join(";", sourceFolders)}");
             csvLines.Add($"JOB_NAME={jobName}");
             csvLines.Add($"SAFE_MODE={safeMode}");
             csvLines.Add($"DRY_RUN={dryRun}");
@@ -58,9 +58,9 @@ public class BackupJob(
         csvLines.Add("Filename,Hash,Extension,Size,Modified Time,InQueue");
         
         var ignoredFilesList = ignoredFiles?.ToList() ?? new List<string>();
-        var allFiles = Directory.GetFiles(sourceFolder, "*", SearchOption.AllDirectories)
+        var allFiles = sourceFolders.SelectMany(sourceFolder => Directory.GetFiles(sourceFolder, "*", SearchOption.AllDirectories)
             .Where(f => !ignoredFilesList.Contains(Path.GetFileName(f)))
-            .OrderBy(Path.GetDirectoryName)
+            .OrderBy(Path.GetDirectoryName))
             .ToList();
 
         var currentDir = "";
@@ -88,7 +88,8 @@ public class BackupJob(
 
             if (string.IsNullOrEmpty(fileHashMtime) || fileHashMtime != fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString() || string.IsNullOrEmpty(fileHash))
             {
-                fileHash = CalculateMd5(filePath);
+                Log.Debug("Berechne Hash für Datei {FilePath} (letzte Änderung: {LastWriteTime})", filePath, fileInfo.LastWriteTimeUtc);
+                fileHash = await CalculateMd5Async(filePath, ct);
                 FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_value", fileHash);
                 FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_mtime", fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString());
             }
@@ -136,7 +137,7 @@ public class BackupJob(
         }
 
         // Schreibe Metadaten-CSV
-        await File.WriteAllLinesAsync(metadataFile, csvLines);
+        await File.WriteAllLinesAsync(metadataFile, csvLines, ct);
         Log.Information("Indizierung abgeschlossen, {FilesIndiziert} Dateien überprüft", filesIndiziert);
         Log.Information("Es müssen noch {FilesToUpload} Dateien hochgeladen werden", filesToUpload);
 
@@ -206,7 +207,7 @@ public class BackupJob(
             
             var metadataBlobName = $"metadata/{jobName}/{year}/{month}/backup_{timestamp}.csv";
             
-            var success = await backend.UploadToDestinationAsync(metadataFile, metadataBlobName, CalculateMd5(metadataFile));
+            var success = await backend.UploadToDestinationAsync(metadataFile, metadataBlobName, await CalculateMd5Async(metadataFile));
             
             if (success)
             {
@@ -223,11 +224,11 @@ public class BackupJob(
         }
     }
 
-    private static string CalculateMd5(string filePath)
+    private static async Task<string> CalculateMd5Async(string filePath, CancellationToken ct = default)
     {
         using var md5 = System.Security.Cryptography.MD5.Create();
-        using var stream = File.OpenRead(filePath);
-        var hash = md5.ComputeHash(stream);
+        await using var stream = File.OpenRead(filePath);
+        var hash = await md5.ComputeHashAsync(stream, ct);
         return Convert.ToHexStringLower(hash);
     }
 }
