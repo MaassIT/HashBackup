@@ -23,19 +23,15 @@ public class BackupJob(
         var savedFiles = 0;
         var savedSize = 0L;
         var hashesToUpload = new HashSet<string>();
-        var csvLines = new List<string>();
-        
-        // Konfigurationsdokumentation für die CSV-Datei
-        csvLines.Add("Backup Konfiguration:");
-        csvLines.Add($"Backup ausgeführt am: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        
+        var csvLines = new List<string>
+        {
+            $"Backup ausgeführt am: {DateTime.Now:yyyy-MM-dd HH:mm:ss}"
+        };
+
         // Entweder übergebene Konfigurationsdoku verwenden oder Standard-Konfiguration erstellen
         if (configDoku != null && configDoku.Any())
         {
-            foreach (var line in configDoku)
-            {
-                csvLines.Add(line);
-            }
+            csvLines.AddRange(configDoku);
         }
         else
         {
@@ -64,10 +60,10 @@ public class BackupJob(
         var ignoredFilesList = ignoredFiles?.ToList() ?? new List<string>();
         var allFiles = Directory.GetFiles(sourceFolder, "*", SearchOption.AllDirectories)
             .Where(f => !ignoredFilesList.Contains(Path.GetFileName(f)))
-            .OrderBy(f => Path.GetDirectoryName(f))
+            .OrderBy(Path.GetDirectoryName)
             .ToList();
 
-        string currentDir = "";
+        var currentDir = "";
 
         foreach (var filePath in allFiles)
         {
@@ -190,7 +186,7 @@ public class BackupJob(
         // Hochladen der Metadaten-Datei in den Storage
         if (!dryRun)
         {
-            await UploadBackupMetadataAsync(metadataFile);
+            await UploadBackupMetadataAsync();
         }
         else
         {
@@ -198,7 +194,7 @@ public class BackupJob(
         }
     }
 
-    private async Task UploadBackupMetadataAsync(string metadataFile)
+    private async Task UploadBackupMetadataAsync()
     {
         try
         {

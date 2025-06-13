@@ -17,7 +17,7 @@ try
     Log.Information("Starte HashBackup mit Konfiguration: {ConfigPath}", configPath);
     
     // Entferne den ersten Parameter (configPath) aus den Args für die weitere Verarbeitung
-    string[] configArgs = args.Length > 1 ? args.Skip(1).ToArray() : Array.Empty<string>();
+    var configArgs = args.Length > 1 ? args.Skip(1).ToArray() : [];
     var config = new ConfigLoader(configPath, configArgs);
 
     // Lese alle wichtigen Konfigurationswerte aus und logge sie

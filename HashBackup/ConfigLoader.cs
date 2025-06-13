@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Configuration;
-using System.Collections.Generic;
 
 namespace HashBackup;
 
@@ -10,10 +9,10 @@ public class ConfigLoader
     // Dictionary zur Verfolgung der Konfigurationsquellen
     private Dictionary<string, string> ConfigSources { get; set; }
     
-    private const string SOURCE_FILE = "Konfigurationsdatei";
-    private const string SOURCE_ENV = "Umgebungsvariable";
-    private const string SOURCE_CMDLINE = "Kommandozeile";
-    private const string SOURCE_DEFAULT = "Standardwert";
+    private const string SourceFile = "Konfigurationsdatei";
+    private const string SourceEnv = "Umgebungsvariable";
+    private const string SourceCmdline = "Kommandozeile";
+    private const string SourceDefault = "Standardwert";
 
     public ConfigLoader(string configPath, string[] args)
     {
@@ -31,7 +30,7 @@ public class ConfigLoader
         
         // Erstelle separate Konfigurationsobjekte für jede Quelle,
         // um die Quelle der Werte verfolgen zu können
-        IConfiguration fileConfig = null;
+        IConfiguration? fileConfig;
             
         // Je nach Dateierweiterung den passenden Provider verwenden
         if (configPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
@@ -41,7 +40,7 @@ public class ConfigLoader
             
             // Separate Konfiguration nur für die Datei
             var fileBuilder = new ConfigurationBuilder()
-                .SetBasePath(Path.GetDirectoryName(configPath))
+                .SetBasePath(Path.GetDirectoryName(configPath)!)
                 .AddJsonFile(Path.GetFileName(configPath), optional: false, reloadOnChange: false);
             fileConfig = fileBuilder.Build();
         }
@@ -52,7 +51,7 @@ public class ConfigLoader
             
             // Separate Konfiguration nur für die Datei
             var fileBuilder = new ConfigurationBuilder()
-                .SetBasePath(Path.GetDirectoryName(configPath))
+                .SetBasePath(Path.GetDirectoryName(configPath)!)
                 .AddIniFile(Path.GetFileName(configPath), optional: false, reloadOnChange: false);
             fileConfig = fileBuilder.Build();
         }
@@ -66,7 +65,7 @@ public class ConfigLoader
         {
             foreach (var item in section.AsEnumerable().Where(x => x.Value != null))
             {
-                ConfigSources[item.Key] = SOURCE_FILE;
+                ConfigSources[item.Key] = SourceFile;
             }
         }
         
@@ -81,23 +80,26 @@ public class ConfigLoader
         // Speichere Umgebungsvariablen im ConfigSources-Dictionary
         foreach (var item in envConfig.AsEnumerable().Where(x => x.Value != null))
         {
-            ConfigSources[item.Key] = SOURCE_ENV;
+            ConfigSources[item.Key] = SourceEnv;
         }
         
         // Kommandozeilenargumente hinzufügen (höchste Priorität)
-        if (args != null && args.Length > 0)
+        if (args.Length > 0)
         {
-            builder.AddCommandLine(args, GetCommandLineMapping());
+            // Verarbeite Flag-Parameter speziell, die ohne Wert angegeben werden können
+            var processedArgs = PreprocessCommandLineArgs(args);
+            
+            builder.AddCommandLine(processedArgs, GetCommandLineMapping());
             Log.Debug("Kommandozeilenargumente zur Konfiguration hinzugefügt");
             
             // Separate Konfiguration für Kommandozeilenargumente
-            var cmdBuilder = new ConfigurationBuilder().AddCommandLine(args, GetCommandLineMapping());
+            var cmdBuilder = new ConfigurationBuilder().AddCommandLine(processedArgs, GetCommandLineMapping());
             var cmdConfig = cmdBuilder.Build();
             
             // Speichere Kommandozeilenargumente im ConfigSources-Dictionary
             foreach (var item in cmdConfig.AsEnumerable().Where(x => x.Value != null))
             {
-                ConfigSources[item.Key] = SOURCE_CMDLINE;
+                ConfigSources[item.Key] = SourceCmdline;
             }
         }
             
@@ -108,7 +110,7 @@ public class ConfigLoader
     }
 
     // Dictionary für Mapping von Kurzoptionen zu Konfigurationsschlüsseln
-    private Dictionary<string, string> GetCommandLineMapping()
+    private static Dictionary<string, string> GetCommandLineMapping()
     {
         return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -139,7 +141,7 @@ public class ConfigLoader
 
     public string? Get(string section, string key, string? defaultValue = null)
     {
-        // Bei INI-Dateien werden Sektionen verwendet, bei JSON könnte die Hierarchie durch : getrennt sein
+        // Bei INI-Dateien werden Sektionen verwendet, bei JSON könnte die Hierarchie durch ":" getrennt sein
         var configKey = section + ":" + key;
         var value = Configuration[configKey];
             
@@ -153,7 +155,7 @@ public class ConfigLoader
         {
             Log.Debug("Konfigurationswert nicht gefunden: {Section}:{Key}, verwende Standardwert: {DefaultValue}", section, key, defaultValue);
             // Wir verfolgen auch Standardwerte in unserem Dictionary
-            ConfigSources[configKey] = SOURCE_DEFAULT;
+            ConfigSources[configKey] = SourceDefault;
         }
         else
             Log.Warning("Konfigurationswert nicht gefunden: {Section}:{Key}, kein Standardwert", section, key);
@@ -164,26 +166,26 @@ public class ConfigLoader
     /// <summary>
     /// Gibt die Quelle eines Konfigurationswerts zurück
     /// </summary>
-    public string GetConfigSource(string section, string key)
+    private string GetConfigSource(string section, string key)
     {
         var configKey = section + ":" + key;
-        return ConfigSources.ContainsKey(configKey) ? ConfigSources[configKey] : SOURCE_DEFAULT;
+        return ConfigSources.GetValueOrDefault(configKey, SourceDefault);
     }
     
     /// <summary>
     /// Generiert eine Dokumentation der aktuellen Konfiguration mit Angabe der Quellen
     /// </summary>
-    /// <param name="configPath">Der Pfad zur Konfigurationsdatei, der in der Dokumentation erwähnt wird</param>
+    /// <param name="configPath">Der Pfad zur Konfigurationsdatei</param>
     /// <returns>Eine Liste mit Konfigurationseinträgen für die Dokumentation</returns>
     public List<string> GenerateConfigDoku(string configPath)
     {
-        var result = new List<string>();
-        
-        // Konfigurationsquellen dokumentieren
-        result.Add($"Konfigurationsdatei: {configPath}");
-        result.Add($"Backup ausgeführt am: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        result.Add("");
-        
+        var result = new List<string>
+        {
+            // Konfigurationsquellen dokumentieren
+            $"Konfigurationsdatei: {configPath}",
+            ""
+        };
+
         // Konfigurationswerte nach Sektionen gruppiert dokumentieren
         foreach (var section in GetAllSections())
         {
@@ -191,11 +193,9 @@ public class ConfigLoader
             foreach (var item in Configuration.GetSection(section).AsEnumerable().Where(x => x.Value != null))
             {
                 var key = item.Key.Replace(section + ":", "");
-                if (!string.IsNullOrEmpty(key))
-                {
-                    var source = GetConfigSource(section, key);
-                    result.Add($"{key}={item.Value} ({source})");
-                }
+                if (string.IsNullOrEmpty(key)) continue;
+                var source = GetConfigSource(section, key);
+                result.Add($"{key}={item.Value} ({source})");
             }
             result.Add("");
         }
@@ -203,16 +203,42 @@ public class ConfigLoader
         return result;
     }
     
-    private IEnumerable<string> GetAllSections()
+    private List<string> GetAllSections()
+    {
+        // Alle Kind-Sektionen der Root-Ebene ermitteln
+
+        return Configuration.GetChildren().Select(section => section.Key).ToList();
+    }
+    
+    /// <summary>
+    /// Verarbeitet Kommandozeilenargumente vor, um Parameter ohne Wert zu unterstützen
+    /// </summary>
+    /// <param name="args">Original-Kommandozeilenargumente</param>
+    /// <returns>Verarbeitete Kommandozeilenargumente</returns>
+    private static string[] PreprocessCommandLineArgs(string[] args)
     {
         var result = new List<string>();
+        var flagParameters = new[] { "--safe-mode", "-sm", "--dry-run", "-d" };
         
-        // Alle Kind-Sektionen der Root-Ebene ermitteln
-        foreach (var section in Configuration.GetChildren())
+        for (var i = 0; i < args.Length; i++)
         {
-            result.Add(section.Key);
+            // Prüfen, ob es sich um einen Flag-Parameter handelt
+            if (flagParameters.Contains(args[i]))
+            {
+                // Wenn das nächste Argument ein neuer Parameter ist oder wir am Ende sind,
+                // fügen wir den Flag-Parameter mit dem Wert "true" hinzu
+                if (i == args.Length - 1 || args[i+1].StartsWith('-'))
+                {
+                    result.Add(args[i]);
+                    result.Add("true");
+                    continue; // Wir haben den Parameter bereits hinzugefügt
+                }
+            }
+            
+            // Normaler Parameter, unverändert hinzufügen
+            result.Add(args[i]);
         }
         
-        return result;
+        return result.ToArray();
     }
 }
