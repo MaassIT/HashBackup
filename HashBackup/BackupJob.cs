@@ -10,7 +10,9 @@ public class BackupJob(
     int maxRetries,
     int retryDelay,
     string jobName,
-    int targetDirDepth)
+    int targetDirDepth,
+    IEnumerable<string>? configDoku = null,
+    IEnumerable<string>? ignoredFiles = null)
 {
     public async Task RunAsync()
     {
@@ -22,11 +24,63 @@ public class BackupJob(
         var savedSize = 0L;
         var hashesToUpload = new HashSet<string>();
         var csvLines = new List<string>();
-        var allFiles = Directory.GetFiles(sourceFolder, "*", SearchOption.AllDirectories);
+        
+        // Konfigurationsdokumentation für die CSV-Datei
+        csvLines.Add("Backup Konfiguration:");
+        csvLines.Add($"Backup ausgeführt am: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        
+        // Entweder übergebene Konfigurationsdoku verwenden oder Standard-Konfiguration erstellen
+        if (configDoku != null && configDoku.Any())
+        {
+            foreach (var line in configDoku)
+            {
+                csvLines.Add(line);
+            }
+        }
+        else
+        {
+            // Standard-Konfigurationsdokumentation erstellen
+            csvLines.Add($"SOURCE_FOLDER={sourceFolder}");
+            csvLines.Add($"JOB_NAME={jobName}");
+            csvLines.Add($"SAFE_MODE={safeMode}");
+            csvLines.Add($"DRY_RUN={dryRun}");
+            csvLines.Add($"PARALLEL_UPLOADS={parallelUploads}");
+            csvLines.Add($"MAX_RETRIES={maxRetries}");
+            csvLines.Add($"RETRY_DELAY={retryDelay}");
+            csvLines.Add($"TARGET_DIR_DEPTH={targetDirDepth}");
+            csvLines.Add($"STORAGE_BACKEND={backend.GetType().Name}");
+            
+            if (ignoredFiles != null && ignoredFiles.Any())
+            {
+                csvLines.Add($"IGNORED_FILES={string.Join(", ", ignoredFiles)}");
+            }
+        }
+        csvLines.Add("EOF");
+        csvLines.Add("");
+        
+        // CSV-Header
+        csvLines.Add("Filename,Hash,Extension,Size,Modified Time,InQueue");
+        
+        var ignoredFilesList = ignoredFiles?.ToList() ?? new List<string>();
+        var allFiles = Directory.GetFiles(sourceFolder, "*", SearchOption.AllDirectories)
+            .Where(f => !ignoredFilesList.Contains(Path.GetFileName(f)))
+            .OrderBy(f => Path.GetDirectoryName(f))
+            .ToList();
+
+        string currentDir = "";
 
         foreach (var filePath in allFiles)
         {
             filesIndiziert++;
+            
+            // Verzeichniswechsel erkennen und in CSV vermerken
+            var directory = Path.GetDirectoryName(filePath);
+            if (directory != currentDir)
+            {
+                csvLines.Add($"dir >> {directory}");
+                currentDir = directory;
+            }
+            
             var fileInfo = new FileInfo(filePath);
             var fileSize = fileInfo.Length;
             var fileExtension = fileInfo.Extension;
@@ -132,6 +186,45 @@ public class BackupJob(
         }
         await Task.WhenAll(tasks);
         Log.Information("Backup abgeschlossen: {SavedFiles} Dateien gesichert mit {SavedSizeMB:F2} MB", savedFiles, (float)savedSize / 1024 / 1024.0);
+        
+        // Hochladen der Metadaten-Datei in den Storage
+        if (!dryRun)
+        {
+            await UploadBackupMetadataAsync(metadataFile);
+        }
+        else
+        {
+            Log.Information("[DRY RUN] Würde Metadaten-Datei {MetadataFile} in den Storage hochladen", metadataFile);
+        }
+    }
+
+    private async Task UploadBackupMetadataAsync(string metadataFile)
+    {
+        try
+        {
+            // Erstellen des Zeitstempels und des Ziel-Pfads wie im Python-Script
+            var now = DateTime.Now;
+            var year = now.ToString("yyyy");
+            var month = now.ToString("MM");
+            var timestamp = now.ToString("yyyy-MM-dd_HH-mm-ss");
+            
+            var metadataBlobName = $"metadata/{jobName}/{year}/{month}/backup_{timestamp}.csv";
+            
+            var success = await backend.UploadToDestinationAsync(metadataFile, metadataBlobName, CalculateMd5(metadataFile));
+            
+            if (success)
+            {
+                Log.Information("Backup-Metadaten hochgeladen nach {BlobName}", metadataBlobName);
+            }
+            else
+            {
+                Log.Error("Fehler beim Hochladen der Backup-Metadaten nach {BlobName}", metadataBlobName);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Fehler beim Hochladen der Backup-Metadaten");
+        }
     }
 
     private static string CalculateMd5(string filePath)

@@ -57,6 +57,20 @@ try
     Log.Information("  Job-Name: {JobName}", jobName);
     Log.Information("  Zielverzeichnistiefe: {TargetDirDepth}", targetDirDepth);
 
+    // Lade ignorierte Dateien
+    var ignoredFilesStr = config.Get("DEFAULT", "IGNORED_FILES", "");
+    var ignoredFiles = string.IsNullOrWhiteSpace(ignoredFilesStr) 
+        ? new List<string>() 
+        : ignoredFilesStr.Split(',').Select(x => x.Trim()).ToList();
+    
+    if (ignoredFiles.Any())
+    {
+        Log.Information("  Ignorierte Dateien: {IgnoredFiles}", string.Join(", ", ignoredFiles));
+    }
+    
+    // Generiere die Konfigurationsdokumentation für die CSV-Datei
+    var configDoku = config.GenerateConfigDoku(configPath);
+
     // Erstelle das Backend
     var backend = StorageBackendFactory.Create(config);
     
@@ -78,7 +92,9 @@ try
         maxRetries,
         retryDelay,
         jobName,
-        targetDirDepth
+        targetDirDepth,
+        configDoku,
+        ignoredFiles
     );
     await backupJob.RunAsync();
 }
