@@ -15,19 +15,19 @@ public class ConfigLoader
             .SetBasePath(Path.GetDirectoryName(configPath) ?? throw new InvalidOperationException())
             .SetFileLoadExceptionHandler(context => 
             {
-                Log.Error("Fehler beim Laden der Konfigurationsdatei {Path}: {Exception}", 
-                    context.Provider.Source.Path, context.Exception);
+                Log.Error(context.Exception, "Fehler beim Laden der Konfigurationsdatei {Path}", 
+                    context.Provider.Source.Path);
             });
             
         // Je nach Dateierweiterung den passenden Provider verwenden
         if (configPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
         {
-            builder.AddJsonFile(System.IO.Path.GetFileName(configPath), optional: false, reloadOnChange: true);
+            builder.AddJsonFile(Path.GetFileName(configPath), optional: false, reloadOnChange: true);
             Log.Debug("JSON-Konfigurationsprovider konfiguriert für {Path}", configPath);
         }
         else if (configPath.EndsWith(".ini", StringComparison.OrdinalIgnoreCase))
         {
-            builder.AddIniFile(System.IO.Path.GetFileName(configPath), optional: false, reloadOnChange: true);
+            builder.AddIniFile(Path.GetFileName(configPath), optional: false, reloadOnChange: true);
             Log.Debug("INI-Konfigurationsprovider konfiguriert für {Path}", configPath);
         }
         else
