@@ -1,5 +1,6 @@
-﻿Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Debug()
+﻿// Konfiguriere den Logger vorläufig mit Info-Level
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
     .WriteTo.Console(
         outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
     .Enrich.FromLogContext()
@@ -19,6 +20,10 @@ try
     // Entferne den ersten Parameter (configPath) aus den Args für die weitere Verarbeitung
     var configArgs = args.Length > 1 ? args.Skip(1).ToArray() : [];
     var config = new ConfigLoader(configPath, configArgs);
+    
+    // Rekonfiguriere den Logger mit dem konfigurierten Log-Level
+    var logLevel = config.Get("DEFAULT", "LOG_LEVEL", "Information")!;
+    ConfigureLogger(logLevel);
 
     // Lese alle wichtigen Konfigurationswerte aus und logge sie
     var backupType = config.Get("DEFAULT", "BACKUP_TYPE")!;
@@ -141,10 +146,43 @@ void ShowHelp()
     Console.WriteLine("  -r, --max-retries <num>  Max. Anzahl an Wiederholungen");
     Console.WriteLine("  -rd, --retry-delay <sec> Verzögerung zwischen Wiederholungen");
     Console.WriteLine("  -dd, --dir-depth <num>   Tiefe der Zielverzeichnisstruktur");
+    Console.WriteLine("  -ll, --log-level <level> Log-Level (Verbose, Debug, Information, Warning, Error, Fatal)");
     Console.WriteLine();
     Console.WriteLine("Umgebungsvariablen:");
     Console.WriteLine("  HASHBACKUP_DEFAULT__*    Konfigurationsvariablen mit HASHBACKUP_-Prefix");
     Console.WriteLine("  Beispiel: HASHBACKUP_DEFAULT__SOURCE_FOLDER=/path/to/source");
     
     Log.Information("Hilfe zur Verwendung von HashBackup angezeigt");
+}
+
+// Konfiguriert den Logger mit dem angegebenen Log-Level
+void ConfigureLogger(string logLevelString)
+{
+    var logLevel = ParseLogLevel(logLevelString);
+    
+    Log.Logger = new LoggerConfiguration()
+        .MinimumLevel.Is(logLevel)
+        .WriteTo.Console(
+            outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+        .Enrich.FromLogContext()
+        .CreateLogger();
+    
+    Log.Information("Logger mit Log-Level {LogLevel} konfiguriert", logLevelString);
+}
+
+// Konvertiert einen String in ein LogEventLevel
+LogEventLevel ParseLogLevel(string logLevelString)
+{
+    return logLevelString.ToLower() switch
+    {
+        "verbose" => LogEventLevel.Verbose,
+        "debug" => LogEventLevel.Debug,
+        "information" => LogEventLevel.Information,
+        "info" => LogEventLevel.Information,
+        "warning" => LogEventLevel.Warning,
+        "warn" => LogEventLevel.Warning,
+        "error" => LogEventLevel.Error,
+        "fatal" => LogEventLevel.Fatal,
+        _ => LogEventLevel.Information // Standard ist Information
+    };
 }

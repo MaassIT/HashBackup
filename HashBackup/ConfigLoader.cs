@@ -137,7 +137,9 @@ public class ConfigLoader
             { "-dd", "DEFAULT:TARGET_DIR_DEPTH" },
             { "--dir-depth", "DEFAULT:TARGET_DIR_DEPTH" },
             { "-lf", "DEFAULT:LOCK_FILE" },
-            { "--lock-file", "DEFAULT:LOCK_FILE" }
+            { "--lock-file", "DEFAULT:LOCK_FILE" },
+            { "-ll", "DEFAULT:LOG_LEVEL" },
+            { "--log-level", "DEFAULT:LOG_LEVEL" }
         };
     }
 

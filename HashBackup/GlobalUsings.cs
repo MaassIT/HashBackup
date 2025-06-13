@@ -5,3 +5,4 @@ global using HashBackup;
 global using HashBackup.Storage;
 global using HashBackup.Utils;
 global using Serilog;
+global using Serilog.Events;
