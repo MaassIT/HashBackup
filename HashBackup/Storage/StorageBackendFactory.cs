@@ -11,6 +11,8 @@ namespace HashBackup.Storage
         public static IStorageBackend Create(ConfigLoader config)
         {
             var backupType = config.Get("DEFAULT", "BACKUP_TYPE", "local_storage")?.ToLower();
+            Log.Debug("Erstelle Storage-Backend vom Typ: {BackupType}", backupType);
+            
             switch (backupType)
             {
                 case "azure":
@@ -20,9 +22,11 @@ namespace HashBackup.Storage
                               ?? throw new ArgumentException("Fehlende Konfiguration: AZURE:STORAGE_KEY");
                     var container = config.Get("AZURE", "CONTAINER") 
                                     ?? throw new ArgumentException("Fehlende Konfiguration: AZURE:CONTAINER");
+                    Log.Information("Azure Storage Backend wird initialisiert mit Account: {Account}, Container: {Container}", account, container);
                     return new AzureStorageBackend(account, key, container);
                 default:
                     var dest = config.Get("LOCAL_STORAGE", "DESTINATION") ?? throw new ArgumentException("Lokales Ziel fehlt in der Konfiguration! (LOCAL_STORAGE:DESTINATION)");
+                    Log.Information("Lokales Storage Backend wird initialisiert mit Zielverzeichnis: {Destination}", dest);
                     return new LocalStorageBackend(dest);
             }
         }
