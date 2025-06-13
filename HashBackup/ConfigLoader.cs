@@ -1,4 +1,3 @@
-using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 
 namespace HashBackup;
@@ -61,10 +60,4 @@ public class ConfigLoader
                 
         return defaultValue;
     }
-}
-
-[JsonSourceGenerationOptions(WriteIndented = true)]
-[JsonSerializable(typeof(Dictionary<string, Dictionary<string, string>>))]
-internal partial class ConfigJsonContext : JsonSerializerContext
-{
 }
