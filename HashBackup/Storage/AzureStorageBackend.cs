@@ -66,6 +66,11 @@ namespace HashBackup.Storage
                 Log.Information("{DestinationPath} existiert bereits", destinationPath);
                 return true;
             }
+            catch (RequestFailedException ex) when (ex.ErrorCode == "BlobArchived")
+            {
+                Log.Information("{DestinationPath} existiert bereits (archiviert)", destinationPath);
+                return true;
+            }
             catch (Exception ex)
             {
                 Log.Error(ex, "Fehler beim Hochladen von {FilePath} nach {DestinationPath}", filePath, destinationPath);

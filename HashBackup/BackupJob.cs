@@ -118,7 +118,7 @@ public class BackupJob(
             else if (backupMtime != fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString())
             {
                 uploadRequired = true;
-                Log.Information("Upload erforderlich (mtime): {FilePath} (Backup-Mtime: {BackupMtime}, Datei-Mtime: {FileMtime})", filePath, backupMtime, fileInfo.LastWriteTimeUtc.ToFileTimeUtc());
+                Log.Debug("Upload erforderlich (mtime): {FilePath} (Backup-Mtime: {BackupMtime}, Datei-Mtime: {FileMtime})", filePath, backupMtime, fileInfo.LastWriteTimeUtc.ToFileTimeUtc());
             }
 
             if (uploadRequired && fileSize > 0 && !hashesToUpload.Contains(fileHash))
