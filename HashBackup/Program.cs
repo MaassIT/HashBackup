@@ -7,14 +7,18 @@
 
 try
 {
-    if (args.Length < 1)
+    if (args.Length < 1 || args[0] == "--help" || args[0] == "-h")
     {
-        Log.Error("Bitte Konfigurationsdatei als Argument angeben (INI oder JSON)");
+        ShowHelp();
         return;
     }
+
     var configPath = args[0];
     Log.Information("Starte HashBackup mit Konfiguration: {ConfigPath}", configPath);
-    var config = new ConfigLoader(configPath);
+    
+    // Entferne den ersten Parameter (configPath) aus den Args für die weitere Verarbeitung
+    string[] configArgs = args.Length > 1 ? args.Skip(1).ToArray() : Array.Empty<string>();
+    var config = new ConfigLoader(configPath, configArgs);
 
     // Lese alle wichtigen Konfigurationswerte aus und logge sie
     var backupType = config.Get("DEFAULT", "BACKUP_TYPE")!;
@@ -85,4 +89,33 @@ catch (Exception ex)
 finally
 {
     Log.CloseAndFlush();
+}
+
+void ShowHelp()
+{
+    Console.WriteLine("HashBackup - Tool zum Hashbasierten Backup von Dateien");
+    Console.WriteLine("Verwendung: HashBackup <config-file> [optionen]");
+    Console.WriteLine();
+    Console.WriteLine("Parameter:");
+    Console.WriteLine("  <config-file>            Pfad zur Konfigurationsdatei (.ini oder .json)");
+    Console.WriteLine("  -h, --help               Zeigt diese Hilfe an");
+    Console.WriteLine();
+    Console.WriteLine("Optionen:");
+    Console.WriteLine("  -s, --source <path>      Quellverzeichnis für das Backup");
+    Console.WriteLine("  -t, --target <path>      Zielort für das Backup");
+    Console.WriteLine("  -j, --job-name <name>    Name des Backup-Jobs");
+    Console.WriteLine("  -tp, --type <type>       Typ des Backups (lokal oder azure)");
+    Console.WriteLine("  -m, --metadata <file>    Pfad zur Metadaten-Datei");
+    Console.WriteLine("  -p, --parallel <num>     Anzahl paralleler Uploads");
+    Console.WriteLine("  -sm, --safe-mode         Safe-Mode aktivieren");
+    Console.WriteLine("  -d, --dry-run            Dry-Run ohne tatsächliche Änderungen");
+    Console.WriteLine("  -r, --max-retries <num>  Max. Anzahl an Wiederholungen");
+    Console.WriteLine("  -rd, --retry-delay <sec> Verzögerung zwischen Wiederholungen");
+    Console.WriteLine("  -dd, --dir-depth <num>   Tiefe der Zielverzeichnisstruktur");
+    Console.WriteLine();
+    Console.WriteLine("Umgebungsvariablen:");
+    Console.WriteLine("  HASHBACKUP_DEFAULT__*    Konfigurationsvariablen mit HASHBACKUP_-Prefix");
+    Console.WriteLine("  Beispiel: HASHBACKUP_DEFAULT__SOURCE_FOLDER=/path/to/source");
+    
+    Log.Information("Hilfe zur Verwendung von HashBackup angezeigt");
 }
