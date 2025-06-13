@@ -135,7 +135,9 @@ public class ConfigLoader
             { "-rd", "DEFAULT:RETRY_DELAY" },
             { "--retry-delay", "DEFAULT:RETRY_DELAY" },
             { "-dd", "DEFAULT:TARGET_DIR_DEPTH" },
-            { "--dir-depth", "DEFAULT:TARGET_DIR_DEPTH" }
+            { "--dir-depth", "DEFAULT:TARGET_DIR_DEPTH" },
+            { "-lf", "DEFAULT:LOCK_FILE" },
+            { "--lock-file", "DEFAULT:LOCK_FILE" }
         };
     }
 

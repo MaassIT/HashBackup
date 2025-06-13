@@ -1,4 +1,6 @@
-﻿Log.Logger = new LoggerConfiguration()
+﻿using HashBackup.Utils;
+
+Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
     .WriteTo.Console(
         outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
@@ -28,6 +30,19 @@ try
         Log.Error("Fehler: SOURCE_FOLDER ist nicht gesetzt");
         return;
     }
+    
+    // Prüfe und setze den Lock, damit das Backup nicht mehrfach gleichzeitig läuft
+    var lockFilePath = config.Get("DEFAULT", "LOCK_FILE", Path.Combine(Path.GetTempPath(), "hashbackup.lock"));
+    Log.Information("Verwende Lock-Datei: {LockFilePath}", lockFilePath);
+    
+    using var fileLock = new FileLock(lockFilePath);
+    if (!fileLock.TryAcquireLock())
+    {
+        Log.Error("Eine andere Instanz von HashBackup läuft bereits. Beende Programm...");
+        return;
+    }
+    
+    Log.Information("Lock erfolgreich gesetzt. Starte Backup...");
     
     var metadataFile = config.Get("DEFAULT", "BACKUP_METADATA_FILE", "backup_metadata.csv");
     if (string.IsNullOrWhiteSpace(metadataFile))
