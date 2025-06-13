@@ -1,6 +1,4 @@
-﻿using HashBackup.Utils;
-
-Log.Logger = new LoggerConfiguration()
+﻿Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
     .WriteTo.Console(
         outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
@@ -32,7 +30,7 @@ try
     }
     
     // Prüfe und setze den Lock, damit das Backup nicht mehrfach gleichzeitig läuft
-    var lockFilePath = config.Get("DEFAULT", "LOCK_FILE", Path.Combine(Path.GetTempPath(), "hashbackup.lock"));
+    var lockFilePath = config.Get("DEFAULT", "LOCK_FILE", Path.Combine(Path.GetTempPath(), "hashbackup.lock"))!;
     Log.Information("Verwende Lock-Datei: {LockFilePath}", lockFilePath);
     
     using var fileLock = new FileLock(lockFilePath);

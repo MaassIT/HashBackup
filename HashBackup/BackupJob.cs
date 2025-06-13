@@ -156,7 +156,7 @@ public class BackupJob(
                     }
                     try
                     {
-                        var success = await backend.UploadToDestinationAsync(item.filePath, item.destPath, item.fileHash);
+                        var success = await backend.UploadToDestinationAsync(item.filePath, item.destPath, item.fileHash, cts.Token);
                         if (success)
                         {
                             FileAttributesUtil.SetAttribute(item.filePath, $"user.{jobName}_backup_mtime", new FileInfo(item.filePath).LastWriteTimeUtc.ToFileTimeUtc().ToString());

@@ -17,10 +17,10 @@ namespace HashBackup.Storage
             _containerClient = blobServiceClient.GetBlobContainerClient(container);
         }
 
-        public async Task<Dictionary<string, long>> FetchHashesAsync()
+        public async Task<Dictionary<string, long>> FetchHashesAsync(CancellationToken ct = default)
         {
             var hashes = new Dictionary<string, long>();
-            await foreach (var blob in _containerClient.GetBlobsAsync())
+            await foreach (var blob in _containerClient.GetBlobsAsync(cancellationToken: ct))
             {
                 try
                 {
@@ -44,7 +44,7 @@ namespace HashBackup.Storage
             return hashes;
         }
 
-        public async Task<bool> UploadToDestinationAsync(string filePath, string destinationPath, string fileHash)
+        public async Task<bool> UploadToDestinationAsync(string filePath, string destinationPath, string fileHash, CancellationToken ct = default)
         {
             try
             {
@@ -57,7 +57,7 @@ namespace HashBackup.Storage
                         ContentHash = StringToByteArray(fileHash)
                     }
                 };
-                await blobClient.UploadAsync(fileStream, options);
+                await blobClient.UploadAsync(fileStream, options, ct);
                 Log.Information("Hochgeladen: {DestinationPath}", destinationPath);
                 return true;
             }

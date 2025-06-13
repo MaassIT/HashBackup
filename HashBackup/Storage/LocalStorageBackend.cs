@@ -4,7 +4,7 @@ public class LocalStorageBackend(string path) : IStorageBackend
 {
     private const string AttrNameMd5HashValue = "user.md5_hash_value";
 
-    public async Task<Dictionary<string, long>> FetchHashesAsync()
+    public async Task<Dictionary<string, long>> FetchHashesAsync(CancellationToken ct = default)
     {
         var hashes = new Dictionary<string, long>();
         foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
@@ -18,7 +18,7 @@ public class LocalStorageBackend(string path) : IStorageBackend
         return await Task.FromResult(hashes);
     }
 
-    public async Task<bool> UploadToDestinationAsync(string filePath, string destinationPath, string fileHash)
+    public async Task<bool> UploadToDestinationAsync(string filePath, string destinationPath, string fileHash, CancellationToken ct = default)
     {
         var localDest = Path.Combine(path, destinationPath);
         Directory.CreateDirectory(Path.GetDirectoryName(localDest)!);
