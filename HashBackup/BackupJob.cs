@@ -14,9 +14,14 @@ public class BackupJob(
     IEnumerable<string>? configDoku = null,
     IEnumerable<string>? ignoredFiles = null)
 {
+    // Standardwert für parallele Hash-Berechnungen
+    private readonly int _parallelHashCalculations = Math.Max(1, Environment.ProcessorCount - 1);
+
     public async Task RunAsync(CancellationToken ct = default)
     {
-        var hashes = safeMode ? await backend.FetchHashesAsync(ct) : new Dictionary<string, long>();
+        // Starte das Abrufen der Hashes vom Backend asynchron, damit es parallel zur weiteren Verarbeitung läuft
+        var hashesTask = safeMode ? backend.FetchHashesAsync(ct) : Task.FromResult(new Dictionary<string, long>());
+        
         var uploadQueue = new ConcurrentQueue<(string filePath, string destPath, string fileHash, int tryCount)>();
         var filesIndiziert = 0;
         var filesToUpload = 0;
@@ -45,6 +50,7 @@ public class BackupJob(
             csvLines.Add($"RETRY_DELAY={retryDelay}");
             csvLines.Add($"TARGET_DIR_DEPTH={targetDirDepth}");
             csvLines.Add($"STORAGE_BACKEND={backend.GetType().Name}");
+            csvLines.Add($"PARALLEL_HASH_CALCULATIONS={_parallelHashCalculations}");
             
             if (ignoredFiles != null && ignoredFiles.Any())
             {
@@ -65,6 +71,91 @@ public class BackupJob(
 
         var currentDir = "";
 
+        // Vorbereitung für parallele Hash-Berechnung
+        var fileInfos = new ConcurrentDictionary<string, (FileInfo Info, string? Hash, string? HashMtime, string? BackupMtime, string BackupMtimeAttr)>();
+        
+        // Vorbereiten der Dateien zur parallelen Verarbeitung
+        foreach (var filePath in allFiles)
+        {
+            var fileInfo = new FileInfo(filePath);
+            var backupMtimeAttr = $"user.{jobName}_backup_mtime";
+            
+            // Speichere grundlegende Dateiinformationen
+            fileInfos[filePath] = (fileInfo, 
+                FileAttributesUtil.GetAttribute(filePath, "user.md5_hash_value"),
+                FileAttributesUtil.GetAttribute(filePath, "user.md5_hash_mtime"),
+                FileAttributesUtil.GetAttribute(filePath, backupMtimeAttr),
+                backupMtimeAttr);
+        }
+
+        // Starten der parallelen Hash-Berechnung für Dateien, die einen neuen Hash benötigen
+        Log.Information("Starte parallele Hash-Berechnung für {Count} Dateien mit {ThreadCount} Threads", allFiles.Count, _parallelHashCalculations);
+        var filesToHash = allFiles.Where(filePath => 
+        {
+            var (info, hash, hashMtime, _, _) = fileInfos[filePath];
+            return string.IsNullOrEmpty(hashMtime) || 
+                   hashMtime != info.LastWriteTimeUtc.ToFileTimeUtc().ToString() || 
+                   string.IsNullOrEmpty(hash);
+        }).ToList();
+
+        var hashTasks = new List<Task>();
+        var hashSemaphore = new SemaphoreSlim(_parallelHashCalculations);
+        var hashesComputed = 0;
+        
+        foreach (var filePath in filesToHash)
+        {
+            await hashSemaphore.WaitAsync(ct);
+            
+            hashTasks.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    var (info, _, _, _, _) = fileInfos[filePath];
+                    Log.Debug("Berechne Hash für Datei {FilePath} (letzte Änderung: {LastWriteTime})", filePath, info.LastWriteTimeUtc);
+                    
+                    var fileHash = await CalculateMd5Async(filePath, ct);
+                    FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_value", fileHash);
+                    FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_mtime", info.LastWriteTimeUtc.ToFileTimeUtc().ToString());
+                    
+                    // Aktualisiere den Hash in unserer Dictionary
+                    var current = fileInfos[filePath];
+                    fileInfos[filePath] = (current.Info, fileHash, info.LastWriteTimeUtc.ToFileTimeUtc().ToString(), current.BackupMtime, current.BackupMtimeAttr);
+                    
+                    Interlocked.Increment(ref hashesComputed);
+                    if (hashesComputed % 100 == 0)
+                    {
+                        Log.Information("{Count}/{Total} Hashes berechnet ({Percent:F1}%)", 
+                            hashesComputed, filesToHash.Count, (float)hashesComputed / filesToHash.Count * 100);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Fehler bei der Hash-Berechnung für {FilePath}", filePath);
+                }
+                finally
+                {
+                    hashSemaphore.Release();
+                }
+            }, ct));
+        }
+
+        // Warten auf Abschluss der Hash-Berechnung
+        if (hashTasks.Any())
+        {
+            Log.Information("Warte auf Abschluss der parallelen Hash-Berechnung...");
+            await Task.WhenAll(hashTasks);
+            Log.Information("Hash-Berechnung abgeschlossen für {Count} Dateien", hashesComputed);
+        }
+        else
+        {
+            Log.Information("Keine neuen Hashes zu berechnen");
+        }
+        
+        // Warte auf das Abrufen der Hashes vom Backend, falls es noch nicht abgeschlossen ist
+        var hashes = await hashesTask;
+        Log.Information("Hash-Abruf vom Backend abgeschlossen: {Count} Hashes gefunden", hashes.Count);
+
+        // Verarbeite alle Dateien und entscheide, welche hochgeladen werden müssen
         foreach (var filePath in allFiles)
         {
             filesIndiziert++;
@@ -77,22 +168,10 @@ public class BackupJob(
                 currentDir = directory;
             }
             
-            var fileInfo = new FileInfo(filePath);
+            var (fileInfo, fileHash, fileHashMtime, backupMtime, backupMtimeAttr) = fileInfos[filePath];
             var fileSize = fileInfo.Length;
             var fileExtension = fileInfo.Extension;
-            var fileHash = FileAttributesUtil.GetAttribute(filePath, "user.md5_hash_value");
-            var fileHashMtime = FileAttributesUtil.GetAttribute(filePath, "user.md5_hash_mtime");
-            var backupMtimeAttr = $"user.{jobName}_backup_mtime";
-            var backupMtime = FileAttributesUtil.GetAttribute(filePath, backupMtimeAttr);
             var uploadRequired = false;
-
-            if (string.IsNullOrEmpty(fileHashMtime) || fileHashMtime != fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString() || string.IsNullOrEmpty(fileHash))
-            {
-                Log.Debug("Berechne Hash für Datei {FilePath} (letzte Änderung: {LastWriteTime})", filePath, fileInfo.LastWriteTimeUtc);
-                fileHash = await CalculateMd5Async(filePath, ct);
-                FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_value", fileHash);
-                FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_mtime", fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString());
-            }
 
             if (safeMode)
             {
