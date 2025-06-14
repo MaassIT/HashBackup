@@ -157,7 +157,7 @@ public class BackupJob(
                     }
                     try
                     {
-                        var success = await backend.UploadToDestinationAsync(item.filePath, item.destPath, item.fileHash, cts.Token);
+                        var success = await backend.UploadToDestinationAsync(item.filePath, item.destPath, item.fileHash, false, cts.Token);
                         if (success)
                         {
                             FileAttributesUtil.SetAttribute(item.filePath, $"user.{jobName}_backup_mtime", new FileInfo(item.filePath).LastWriteTimeUtc.ToFileTimeUtc().ToString());
@@ -187,7 +187,7 @@ public class BackupJob(
         // Hochladen der Metadaten-Datei in den Storage
         if (!dryRun)
         {
-            await UploadBackupMetadataAsync();
+            await UploadBackupMetadataAsync(cts.Token);
         }
         else
         {
@@ -195,7 +195,7 @@ public class BackupJob(
         }
     }
 
-    private async Task UploadBackupMetadataAsync()
+    private async Task UploadBackupMetadataAsync(CancellationToken ct = default)
     {
         try
         {
@@ -207,7 +207,10 @@ public class BackupJob(
             
             var metadataBlobName = $"metadata/{jobName}/{year}/{month}/backup_{timestamp}.csv";
             
-            var success = await backend.UploadToDestinationAsync(metadataFile, metadataBlobName, await CalculateMd5Async(metadataFile));
+            // Metadaten als wichtig markieren, damit sie nicht im Archive-Tier gespeichert werden
+            var success = await backend.UploadToDestinationAsync(metadataFile, metadataBlobName, 
+                await CalculateMd5Async(metadataFile, ct), 
+                isImportant: true, ct: ct);
             
             if (success)
             {

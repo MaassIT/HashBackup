@@ -44,7 +44,7 @@ namespace HashBackup.Storage
             return hashes;
         }
 
-        public async Task<bool> UploadToDestinationAsync(string filePath, string destinationPath, string fileHash, CancellationToken ct = default)
+        public async Task<bool> UploadToDestinationAsync(string filePath, string destinationPath, string fileHash, bool isImportant = false, CancellationToken ct = default)
         {
             try
             {
@@ -57,6 +57,14 @@ namespace HashBackup.Storage
                         ContentHash = StringToByteArray(fileHash)
                     }
                 };
+                
+                // Bei wichtigen Dateien (wie Metadaten) explizit Hot/Cool Tier statt Archive verwenden
+                if (isImportant)
+                {
+                    options.AccessTier = AccessTier.Cold;
+                    Log.Information("Wichtige Datei wird im Cold-Tier hochgeladen: {DestinationPath}", destinationPath);
+                }
+                
                 await blobClient.UploadAsync(fileStream, options, ct);
                 Log.Information("Hochgeladen: {DestinationPath}", destinationPath);
                 return true;

@@ -18,7 +18,7 @@ public class LocalStorageBackend(string path) : IStorageBackend
         return await Task.FromResult(hashes);
     }
 
-    public async Task<bool> UploadToDestinationAsync(string filePath, string destinationPath, string fileHash, CancellationToken ct = default)
+    public async Task<bool> UploadToDestinationAsync(string filePath, string destinationPath, string fileHash, bool isImportant = false, CancellationToken ct = default)
     {
         var localDest = Path.Combine(path, destinationPath);
         Directory.CreateDirectory(Path.GetDirectoryName(localDest)!);
@@ -28,7 +28,16 @@ public class LocalStorageBackend(string path) : IStorageBackend
             try
             {
                 File.Copy(filePath, localDest, overwrite: false);
-                Log.Debug("Lokal gespeichert: {LocalDest}", localDest);
+                
+                // Für lokale Speicherung hat isImportant keine Auswirkung, aber wir können es für Debugging-Zwecke loggen
+                if (isImportant)
+                {
+                    Log.Debug("Wichtige Datei lokal gespeichert: {LocalDest}", localDest);
+                }
+                else
+                {
+                    Log.Debug("Lokal gespeichert: {LocalDest}", localDest);
+                }
             }
             catch (IOException ex) when ((ex.HResult & 0xFFFF) == 0x50) // ERROR_FILE_EXISTS
             {
