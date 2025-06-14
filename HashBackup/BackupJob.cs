@@ -74,6 +74,8 @@ public class BackupJob(
         // Vorbereitung für parallele Hash-Berechnung
         var fileInfos = new ConcurrentDictionary<string, (FileInfo Info, string? Hash, string? HashMtime, string? BackupMtime, string BackupMtimeAttr)>();
         
+        Log.Information("Rufe Dateiattribute und Hashes ab für {Count} Dateien", allFiles.Count);
+        
         // Vorbereiten der Dateien zur parallelen Verarbeitung
         foreach (var filePath in allFiles)
         {
