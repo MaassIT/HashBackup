@@ -66,7 +66,7 @@ namespace HashBackup.Storage
                 }
                 
                 await blobClient.UploadAsync(fileStream, options, ct);
-                Log.Information("Hochgeladen: {DestinationPath}", destinationPath);
+                Log.Information("Hochgeladen: {DestinationPath}", filePath);
                 return true;
             }
             catch (RequestFailedException ex) when (ex.ErrorCode == BlobErrorCode.BlobAlreadyExists)
