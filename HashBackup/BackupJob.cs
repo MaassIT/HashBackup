@@ -71,12 +71,27 @@ public class BackupJob(
 
         var currentDir = "";
 
+        // Liste der Attribute, die wir für jede Datei benötigen
+        var attributesToLoad = new[] {
+            "user.md5_hash_value",
+            "user.md5_hash_mtime",
+            $"user.{jobName}_backup_mtime"
+        };
+        
+        // Vorladen aller Attribute für alle Dateien - deutlich schneller als einzelne Abfragen
+        Log.Information("Lade Dateiattribute für {Count} Dateien vor...", allFiles.Count);
+        var startTime = DateTime.Now;
+        FileAttributesUtil.PreloadAttributes(allFiles, attributesToLoad);
+        
+        Log.Information("Dateiattribute für {Count} Dateien in {ElapsedMs}ms geladen", 
+            allFiles.Count, (DateTime.Now - startTime).TotalMilliseconds);
+
         // Vorbereitung für parallele Hash-Berechnung
         var fileInfos = new ConcurrentDictionary<string, (FileInfo Info, string? Hash, string? HashMtime, string? BackupMtime, string BackupMtimeAttr)>();
         
         Log.Information("Rufe Dateiattribute und Hashes ab für {Count} Dateien", allFiles.Count);
         
-        // Vorbereiten der Dateien zur parallelen Verarbeitung
+        // Vorbereiten der Dateien zur parallelen Verarbeitung - jetzt deutlich schneller dank Cache
         foreach (var filePath in allFiles)
         {
             var fileInfo = new FileInfo(filePath);
@@ -221,6 +236,9 @@ public class BackupJob(
         await File.WriteAllLinesAsync(metadataFile, csvLines, ct);
         Log.Information("Indizierung abgeschlossen, {FilesIndiziert} Dateien überprüft", filesIndiziert);
         Log.Information("Es müssen noch {FilesToUpload} Dateien hochgeladen werden", filesToUpload);
+
+        // Cache leeren, um Speicher freizugeben
+        FileAttributesUtil.ClearCache();
 
         // Parallele Uploads
         var tasks = new List<Task>();

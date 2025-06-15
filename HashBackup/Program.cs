@@ -121,12 +121,12 @@ try
     var backend = StorageBackendFactory.Create(config);
     
     // Jetzt erst mit den Hashes arbeiten
-    var hashes = await backend.FetchHashesAsync();
-    Log.Information("Gefundene Hashes im Ziel: {Count}", hashes.Count);
-    foreach (var kv in hashes)
-    {
-        Log.Debug("Hash: {Hash} -> Größe: {Size}", kv.Key, kv.Value);
-    }
+    // var hashes = await backend.FetchHashesAsync();
+    // Log.Information("Gefundene Hashes im Ziel: {Count}", hashes.Count);
+    // foreach (var kv in hashes)
+    // {
+    //     Log.Debug("Hash: {Hash} -> Größe: {Size}", kv.Key, kv.Value);
+    // }
 
     var backupJob = new BackupJob(
         backend,
