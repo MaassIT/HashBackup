@@ -28,7 +28,7 @@ namespace HashBackup.Storage
 
             var blobServiceClient = new BlobServiceClient(
                 new Uri($"https://{accountName}.blob.core.windows.net"),
-                new Azure.Storage.StorageSharedKeyCredential(accountName, accountKey),
+                new StorageSharedKeyCredential(accountName, accountKey),
                 clientOptions
             );
             _containerClient = blobServiceClient.GetBlobContainerClient(container);
@@ -93,22 +93,22 @@ namespace HashBackup.Storage
                 }
                 else if (fileInfo.Length > 1024 * 1024 * 1024) // Dateien >1GB
                 {
-                    Log.Information("Große Datei ({Size:N2} MB) wird hochgeladen: {DestinationPath}", 
-                        fileInfo.Length / (1024.0 * 1024.0), destinationPath);
+                    Log.Information("Große Datei ({Size:N2} MB) wird hochgeladen: {FilePath}", 
+                        fileInfo.Length / (1024.0 * 1024.0), filePath);
                 }
                 
                 await blobClient.UploadAsync(fileStream, options, ct);
-                Log.Information("Hochgeladen: {DestinationPath}", filePath);
+                Log.Debug("Hochgeladen: {FilePath} ({FileHash})", filePath, fileHash);
                 return true;
             }
             catch (RequestFailedException ex) when (ex.ErrorCode == BlobErrorCode.BlobAlreadyExists)
             {
-                Log.Information("{DestinationPath} existiert bereits", destinationPath);
+                Log.Information("{FilePath} ({FileHash}) existiert bereits", filePath, fileHash);
                 return true;
             }
             catch (RequestFailedException ex) when (ex.ErrorCode == "BlobArchived")
             {
-                Log.Information("{DestinationPath} existiert bereits (archiviert)", destinationPath);
+                Log.Information("{FilePath} ({FileHash}) existiert bereits (archiviert)", filePath, fileHash);
                 return true;
             }
             catch (Exception ex)
