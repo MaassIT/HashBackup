@@ -129,34 +129,38 @@ public class BackupJob
                 continue;
             }
             
-            var uploadRequired = false;
-
+            bool uploadRequired = false;
+            
             if (_config.SafeMode)
             {
-                if (!hashes.ContainsKey(fileHash))
+                if (!hashes.TryGetValue(fileHash, out long size) || size != fileInfo.Length)
                 {
                     uploadRequired = true;
-                    Log.Debug("Upload erforderlich: {FilePath} (Hash {FileHash} nicht im Ziel gefunden)", filePath, fileHash);
                 }
-                else
+                
+                // Im Safe Mode: Wenn Hash-Upload nicht notwendig, aber die mtime sich geändert hat,
+                // aktualisieren wir den Backup-Zeitstempel
+                if (!uploadRequired && !string.IsNullOrEmpty(fileHashMtime))
                 {
-                    // Hash ist im Ziel vorhanden, prüfe optional die Größe
-                    if (hashes[fileHash] != fileInfo.Length)
+                    // Speichere den Unix-Timestamp im Python-Format
+                    var currentUnixTimestamp = FileAttributesUtil.DateTimeToUnixTimestamp(fileInfo.LastWriteTimeUtc);
+                    if (fileHashMtime != currentUnixTimestamp)
                     {
-                        Log.Warning("WARNUNG: Datei {FilePath} hat gleichen Hash, aber unterschiedliche Größe! Quelle: {SourceSize}, Ziel: {TargetSize}", filePath, fileInfo.Length, hashes[fileHash]);
-                    }
-                    else
-                    {
-                        Log.Debug("Info: Datei {FilePath} ist bereits im Ziel vorhanden (Hash: {FileHash})", filePath, fileHash);
+                        Log.Debug("Korrigiere Sicherungsstatus für {FilePath}, da sich die Zeit geändert hat", filePath);
+                        FileAttributesUtil.SetAttribute(filePath, backupMtimeAttr, currentUnixTimestamp);
                     }
                 }
-                if (!uploadRequired && fileHashMtime != fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString())
-                    FileAttributesUtil.SetAttribute(filePath, backupMtimeAttr, fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString());
             }
-            else if (backupMtime != fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString())
+            else
             {
-                uploadRequired = true;
-                Log.Debug("Upload erforderlich (mtime): {FilePath} (Backup-Mtime: {BackupMtime}, Datei-Mtime: {FileMtime})", filePath, backupMtime, fileInfo.LastWriteTimeUtc.ToFileTimeUtc());
+                // Normale Prüfung: Benötigt Upload, wenn Backup-mtime != aktuelle mtime
+                string currentUnixTimestamp = FileAttributesUtil.DateTimeToUnixTimestamp(fileInfo.LastWriteTimeUtc);
+                
+                // Wenn kein Backup-mtime existiert oder die Zeiten nicht übereinstimmen
+                if (string.IsNullOrEmpty(backupMtime) || backupMtime != currentUnixTimestamp)
+                {
+                    uploadRequired = true;
+                }
             }
 
             // Für Metadaten-CSV speichern

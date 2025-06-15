@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
+using System.Globalization;
 
 namespace HashBackup.Utils;
 
@@ -32,9 +33,29 @@ public static class FileAttributesUtil
             }
             catch (Exception ex)
             {
-                throw new IOException($"Fehler beim Setzen von xattr: {ex.Message}");
+                Log.Warning(ex, "Fehler beim Setzen des Attributs {AttrName} für {FilePath}", attrName, filePath);
             }
         }
+    }
+
+    // Konvertiert DateTime zu Unix-Timestamp (wie in Python's os.path.getmtime)
+    public static string DateTimeToUnixTimestamp(DateTime dateTime)
+    {
+        var epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var unixTimestamp = (dateTime - epoch).TotalSeconds;
+        return unixTimestamp.ToString(CultureInfo.InvariantCulture);
+    }
+
+    // Konvertiert Unix-Timestamp zu DateTime
+    public static DateTime UnixTimestampToDateTime(string timestamp)
+    {
+        if (double.TryParse(timestamp, NumberStyles.Any, CultureInfo.InvariantCulture, out var unixTimestamp))
+        {
+            var epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            return epoch.AddSeconds(unixTimestamp);
+        }
+        
+        return DateTime.MinValue;
     }
 
     public static string? GetAttribute(string filePath, string attrName)

@@ -75,15 +75,19 @@ public class FileHashService
                     
                     var fileHash = await CalculateMd5Async(filePath, ct);
                     FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_value", fileHash);
-                    FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_mtime", info.LastWriteTimeUtc.ToFileTimeUtc().ToString());
+                    // Unix-Timestamp im Python-Format speichern anstatt FileTime
+                    FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_mtime", 
+                        FileAttributesUtil.DateTimeToUnixTimestamp(info.LastWriteTimeUtc));
                     
                     // Aktualisiere den Hash in unserer Dictionary
-                    files[filePath] = (info, fileHash, info.LastWriteTimeUtc.ToFileTimeUtc().ToString(), backupMtime, backupMtimeAttr);
+                    files[filePath] = (info, fileHash, 
+                        FileAttributesUtil.DateTimeToUnixTimestamp(info.LastWriteTimeUtc), 
+                        backupMtime, backupMtimeAttr);
                     
                     Interlocked.Increment(ref hashesComputed);
                     if (hashesComputed % 100 == 0)
                     {
-                        Log.Information("{Count}/{Total} Hashes berechnet ({Percent:F1}%)", 
+                        Log.Information("{Count}/{Total} Hashes berechnet ({Percent:F1}%)",
                             hashesComputed, filesToHash.Count, (float)hashesComputed / filesToHash.Count * 100);
                     }
                 }
