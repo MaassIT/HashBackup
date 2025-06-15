@@ -136,7 +136,7 @@ public class BackupJob
                 if (!hashes.ContainsKey(fileHash))
                 {
                     uploadRequired = true;
-                    Log.Information("Upload erforderlich: {FilePath} (Hash {FileHash} nicht im Ziel gefunden)", filePath, fileHash);
+                    Log.Debug("Upload erforderlich: {FilePath} (Hash {FileHash} nicht im Ziel gefunden)", filePath, fileHash);
                 }
                 else
                 {
