@@ -63,5 +63,5 @@ public class BackupConfiguration
     /// <summary>
     /// Liste der zu ignorierenden Dateien
     /// </summary>
-    public List<string> IgnoredFiles { get; init; } = new();
+    public List<string> IgnoredFiles { get; init; } = [];
 }

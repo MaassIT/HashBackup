@@ -147,7 +147,7 @@ public class BackupJob
                     }
                     else
                     {
-                        Log.Information("Info: Datei {FilePath} ist bereits im Ziel vorhanden (Hash: {FileHash})", filePath, fileHash);
+                        Log.Debug("Info: Datei {FilePath} ist bereits im Ziel vorhanden (Hash: {FileHash})", filePath, fileHash);
                     }
                 }
                 if (!uploadRequired && fileHashMtime != fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString())
@@ -162,7 +162,10 @@ public class BackupJob
             // Für Metadaten-CSV speichern
             filesForMetadata[filePath] = (fileInfo, fileHash, uploadRequired);
 
-            if (uploadRequired && fileInfo.Length > 0 && !hashesToUpload.Contains(fileHash) && !fileHash.StartsWith("SYM-"))
+            if (fileHash.StartsWith("SYM-"))
+                uploadRequired = false;
+            
+            if (uploadRequired && fileInfo.Length > 0 && !hashesToUpload.Contains(fileHash))
             {
                 // Zielpfad wie im Python-Tool: z.B. a/b/c/hash.ext für targetDirDepth=3
                 var dirParts = new List<string>();
@@ -174,7 +177,7 @@ public class BackupJob
                 filesToUpload++;
                 Log.Debug("Datei für Upload eingeplant: {FilePath}", filePath);
             }
-            else if (fileHash.StartsWith("SYM-") && uploadRequired)
+            else if (fileHash.StartsWith("SYM-"))
             {
                 Log.Debug("Symbolischer Link erkannt und nur in Metadaten erfasst (kein Upload): {FilePath}", filePath);
                 // Wir markieren den Link als gesichert, indem wir den Backup-Mtime aktualisieren

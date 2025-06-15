@@ -11,7 +11,7 @@ public class Application(string[] args)
     /// <summary>
     /// Führt die Anwendung aus
     /// </summary>
-    public async Task<int> RunAsync()
+    public async Task RunAsync()
     {
         try
         {
@@ -19,7 +19,7 @@ public class Application(string[] args)
             if (args.Length < 1 || args[0] == "--help" || args[0] == "-h")
             {
                 ShowHelp();
-                return 0;
+                return;
             }
 
             var configPath = args[0];
@@ -37,7 +37,7 @@ public class Application(string[] args)
             _backupConfig = LoadBackupConfiguration(_config);
             if (_backupConfig == null)
             {
-                return 1; // Fehler beim Laden der Konfiguration
+                return;
             }
             
             // Backup-Konfiguration protokollieren
@@ -48,7 +48,7 @@ public class Application(string[] args)
             if (!fileLock.TryAcquireLock())
             {
                 Log.Error("Eine andere Instanz von HashBackup läuft bereits. Beende Programm...");
-                return 1;
+                return;
             }
             
             Log.Information("Lock erfolgreich gesetzt. Starte Backup...");
@@ -62,13 +62,10 @@ public class Application(string[] args)
             // Erstelle und führe Backup-Job aus
             var backupJob = CreateBackupJob(backend, _backupConfig, configDoku);
             await backupJob.RunAsync();
-            
-            return 0;
         }
         catch (Exception ex)
         {
             Log.Fatal(ex, "Ein schwerwiegender Fehler ist aufgetreten");
-            return 1;
         }
     }
     
