@@ -190,10 +190,14 @@ public class BackupJob
         // Cache leeren, um Speicher freizugeben
         FileAttributesUtil.ClearCache();
 
+        var tasks = new Task[2];
+        
         // Führe die Uploads mit dem UploadCoordinator durch
-        await _uploadCoordinator.UploadFilesAsync(uploadQueue, ct);
+        tasks[0] = _uploadCoordinator.UploadFilesAsync(uploadQueue, ct);
         
         // Hochladen der Metadaten-Datei in den Storage
-        await _metadataManager.UploadBackupMetadataAsync(_backend, _fileHashService, ct);
+        tasks[1] = _metadataManager.UploadBackupMetadataAsync(_backend, _fileHashService, ct);
+
+        Task.WaitAll(tasks, ct);
     }
 }
