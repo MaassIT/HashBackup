@@ -1,6 +1,6 @@
 namespace HashBackup;
 
-using HashBackup.Services;
+using Services;
 
 /// <summary>
 /// Hauptklasse für die Ausführung eines Backup-Jobs
@@ -9,7 +9,6 @@ public class BackupJob
 {
     private readonly IStorageBackend _backend;
     private readonly BackupConfiguration _config;
-    private readonly IEnumerable<string> _configDoku;
     private readonly FileHashService _fileHashService;
     private readonly MetadataManager _metadataManager;
     private readonly UploadCoordinator _uploadCoordinator;
@@ -24,13 +23,13 @@ public class BackupJob
     {
         _backend = backend;
         _config = config;
-        _configDoku = configDoku ?? Array.Empty<string>();
-        
+        var configDoku1 = configDoku ?? [];
+
         // Services initialisieren
         _fileHashService = new FileHashService();
         _metadataManager = new MetadataManager(
             config.MetadataFile, 
-            _configDoku, 
+            configDoku1, 
             config.JobName, 
             config.DryRun);
         _uploadCoordinator = new UploadCoordinator(
@@ -184,7 +183,7 @@ public class BackupJob
         }
 
         // Schreibe Metadaten-CSV mit dem MetadataManager
-        var csvLines = await _metadataManager.GenerateMetadataCsvAsync(filesForMetadata, ct);
+        await _metadataManager.GenerateMetadataCsvAsync(filesForMetadata, ct);
         Log.Information("Indizierung abgeschlossen, {FilesIndiziert} Dateien überprüft", filesIndiziert);
         Log.Information("Es müssen noch {FilesToUpload} Dateien hochgeladen werden", filesToUpload);
 

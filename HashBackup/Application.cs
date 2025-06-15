@@ -1,21 +1,13 @@
-using Microsoft.Extensions.Configuration;
-
 namespace HashBackup;
 
 /// <summary>
 /// Hauptanwendungsklasse für HashBackup
 /// </summary>
-public class Application
+public class Application(string[] args)
 {
-    private readonly string[] _args;
     private ConfigLoader? _config;
     private BackupConfiguration? _backupConfig;
-    
-    public Application(string[] args)
-    {
-        _args = args;
-    }
-    
+
     /// <summary>
     /// Führt die Anwendung aus
     /// </summary>
@@ -24,17 +16,17 @@ public class Application
         try
         {
             // Hilfe anzeigen, wenn keine Argumente vorhanden sind oder Hilfe angefordert wird
-            if (_args.Length < 1 || _args[0] == "--help" || _args[0] == "-h")
+            if (args.Length < 1 || args[0] == "--help" || args[0] == "-h")
             {
                 ShowHelp();
                 return 0;
             }
 
-            var configPath = _args[0];
+            var configPath = args[0];
             Log.Information("Starte HashBackup mit Konfiguration: {ConfigPath}", configPath);
             
             // Entferne den ersten Parameter (configPath) aus den Args für die weitere Verarbeitung
-            var configArgs = _args.Length > 1 ? _args.Skip(1).ToArray() : [];
+            var configArgs = args.Length > 1 ? args.Skip(1).ToArray() : [];
             _config = new ConfigLoader(configPath, configArgs);
             
             // Rekonfiguriere den Logger mit dem konfigurierten Log-Level

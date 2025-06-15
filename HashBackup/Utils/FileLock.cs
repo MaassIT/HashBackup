@@ -1,5 +1,3 @@
-using System.IO;
-
 namespace HashBackup.Utils;
 
 /// <summary>
@@ -64,7 +62,7 @@ public class FileLock : IDisposable
     /// <summary>
     /// Gibt den Lock frei und löscht die Lockdatei.
     /// </summary>
-    public void ReleaseLock()
+    private void ReleaseLock()
     {
         _lockFileStream?.Close();
         _lockFileStream?.Dispose();

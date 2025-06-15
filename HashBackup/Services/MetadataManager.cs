@@ -3,20 +3,9 @@ namespace HashBackup.Services;
 /// <summary>
 /// Verwaltet die Metadaten des Backup-Prozesses
 /// </summary>
-public class MetadataManager
+public class MetadataManager(string metadataFile, IEnumerable<string> configDoku, string jobName, bool dryRun)
 {
-    private readonly string _metadataFile;
-    private readonly List<string> _configDoku;
-    private readonly string _jobName;
-    private readonly bool _dryRun;
-
-    public MetadataManager(string metadataFile, IEnumerable<string> configDoku, string jobName, bool dryRun)
-    {
-        _metadataFile = metadataFile;
-        _configDoku = configDoku.ToList();
-        _jobName = jobName;
-        _dryRun = dryRun;
-    }
+    private readonly List<string> _configDoku = configDoku.ToList();
 
     /// <summary>
     /// Generiert eine CSV-Datei mit den Metadaten des Backups
@@ -63,7 +52,6 @@ public class MetadataManager
             // Dateien im aktuellen Verzeichnis
             foreach (var fileEntry in dirGroup.OrderBy(f => f.Key))
             {
-                var filePath = fileEntry.Key;
                 var (fileInfo, fileHash, uploadRequired) = fileEntry.Value;
                 
                 csvLines.Add($"{fileInfo.Name},{fileHash},{fileInfo.Extension},{fileInfo.Length},{fileInfo.LastWriteTimeUtc.ToFileTimeUtc()},{(uploadRequired && fileInfo.Length > 0 ? "x" : "")}");
@@ -71,8 +59,8 @@ public class MetadataManager
         }
         
         // Metadaten speichern
-        await File.WriteAllLinesAsync(_metadataFile, csvLines, ct);
-        Log.Information("Metadaten wurden in Datei {MetadataFile} geschrieben", _metadataFile);
+        await File.WriteAllLinesAsync(metadataFile, csvLines, ct);
+        Log.Information("Metadaten wurden in Datei {MetadataFile} geschrieben", metadataFile);
         
         return csvLines;
     }
@@ -87,9 +75,9 @@ public class MetadataManager
     {
         try
         {
-            if (_dryRun)
+            if (dryRun)
             {
-                Log.Information("[DRY RUN] Würde Metadaten-Datei {MetadataFile} in den Storage hochladen", _metadataFile);
+                Log.Information("[DRY RUN] Würde Metadaten-Datei {MetadataFile} in den Storage hochladen", metadataFile);
                 return;
             }
             
@@ -99,11 +87,11 @@ public class MetadataManager
             var month = now.ToString("MM");
             var timestamp = now.ToString("yyyy-MM-dd_HH-mm-ss");
             
-            var metadataBlobName = $"metadata/{_jobName}/{year}/{month}/backup_{timestamp}.csv";
+            var metadataBlobName = $"metadata/{jobName}/{year}/{month}/backup_{timestamp}.csv";
             
             // Metadaten als wichtig markieren, damit sie nicht im Archive-Tier gespeichert werden
-            var success = await backend.UploadToDestinationAsync(_metadataFile, metadataBlobName, 
-                await hashService.CalculateMd5Async(_metadataFile, ct), 
+            var success = await backend.UploadToDestinationAsync(metadataFile, metadataBlobName, 
+                await hashService.CalculateMd5Async(metadataFile, ct), 
                 isImportant: true, ct: ct);
             
             if (success)

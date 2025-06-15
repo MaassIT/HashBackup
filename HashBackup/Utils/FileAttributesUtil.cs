@@ -1,8 +1,9 @@
-using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 namespace HashBackup.Utils;
 
+[SuppressMessage("Interoperability", "SYSLIB1054:Verwenden Sie \\\"LibraryImportAttribute\\\" anstelle von \\\"DllImportAttribute\\\", um P/Invoke-Marshallingcode zur Kompilierzeit zu generieren.")]
 public static class FileAttributesUtil
 {
     // Cache für Attribute, um wiederholte Zugriffe zu vermeiden
@@ -154,7 +155,7 @@ public static class FileAttributesUtil
 
     // Korrigierte Signatur für getxattr (nutze long und ulong für Kompatibilität)
     [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi)]
-    public static extern long getxattr(
+    private static extern long getxattr(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
         byte[]? value,
