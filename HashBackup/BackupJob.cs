@@ -218,7 +218,7 @@ public class BackupJob(
                 Log.Debug("Upload erforderlich (mtime): {FilePath} (Backup-Mtime: {BackupMtime}, Datei-Mtime: {FileMtime})", filePath, backupMtime, fileInfo.LastWriteTimeUtc.ToFileTimeUtc());
             }
 
-            if (uploadRequired && fileSize > 0 && !hashesToUpload.Contains(fileHash))
+            if (uploadRequired && fileSize > 0 && !hashesToUpload.Contains(fileHash) && !fileHash.StartsWith("SYM-"))
             {
                 // Zielpfad wie im Python-Tool: z.B. a/b/c/hash.ext für targetDirDepth=3
                 var dirParts = new List<string>();
@@ -228,6 +228,13 @@ public class BackupJob(
                 uploadQueue.Enqueue((filePath, destFilePath, fileHash, 0));
                 hashesToUpload.Add(fileHash);
                 filesToUpload++;
+                Log.Debug("Datei für Upload eingeplant: {FilePath}", filePath);
+            }
+            else if (fileHash.StartsWith("SYM-") && uploadRequired)
+            {
+                Log.Debug("Symbolischer Link erkannt und nur in Metadaten erfasst (kein Upload): {FilePath}", filePath);
+                // Wir markieren den Link als gesichert, indem wir den Backup-Mtime aktualisieren
+                FileAttributesUtil.SetAttribute(filePath, backupMtimeAttr, fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString());
             }
             csvLines.Add($"{fileInfo.Name},{fileHash},{fileExtension},{fileSize},{fileInfo.LastWriteTimeUtc.ToFileTimeUtc()},{(uploadRequired && fileSize > 0 ? "x" : "")}");
         }
@@ -328,6 +335,28 @@ public class BackupJob(
 
     private static async Task<string> CalculateMd5Async(string filePath, CancellationToken ct = default)
     {
+        // Prüfe, ob es sich um einen symbolischen Link handelt
+        if (File.GetAttributes(filePath).HasFlag(FileAttributes.ReparsePoint))
+        {
+            // Bei symbolischen Links erfassen wir das tatsächliche Ziel
+            string targetPath;
+            try {
+                // ResolveLinkTarget gibt den tatsächlichen Zielpfad des Symlinks zurück
+                targetPath = File.ResolveLinkTarget(filePath, false)?.FullName ?? "Ziel nicht verfügbar";
+                Log.Debug("Symbolischer Link erkannt: {FilePath} -> {TargetPath}", filePath, targetPath);
+            }
+            catch (Exception ex) {
+                Log.Warning(ex, "Konnte das Ziel des symbolischen Links {FilePath} nicht auflösen", filePath);
+                targetPath = "Ziel nicht verfügbar";
+            }
+            
+            // Zielpfad Base64-kodieren, um ihn sicher im Hash zu speichern
+            var targetPathBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(targetPath));
+            // "SYM-" als Prefix für symbolische Links, gefolgt von Base64-kodiertem Zielpfad
+            return $"SYM-{targetPathBase64}";
+        }
+        
+        // Normale Dateien wie bisher behandeln
         using var md5 = System.Security.Cryptography.MD5.Create();
         await using var stream = File.OpenRead(filePath);
         var hash = await md5.ComputeHashAsync(stream, ct);
