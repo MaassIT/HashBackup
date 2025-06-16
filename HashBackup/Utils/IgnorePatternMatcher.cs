@@ -8,14 +8,14 @@ namespace HashBackup.Utils;
 /// </summary>
 public class IgnorePatternMatcher
 {
-    private readonly List<Regex> _regexPatterns = new();
-    private readonly List<string> _exactMatches = new();
+    private readonly List<Regex> _regexPatterns = [];
+    private readonly List<string> _exactMatches = [];
     
     /// <summary>
     /// Initialisiert eine neue Instanz der IgnorePatternMatcher-Klasse
     /// </summary>
     /// <param name="patterns">Die Liste der zu ignorierenden Muster</param>
-    public IgnorePatternMatcher(IEnumerable<string> patterns)
+    public IgnorePatternMatcher(IEnumerable<string>? patterns)
     {
         if (patterns == null) return;
         
@@ -65,13 +65,9 @@ public class IgnorePatternMatcher
         }
         
         // Prüfe dann Regex-Muster
-        foreach (var regex in _regexPatterns)
-        {
-            if (!regex.IsMatch(fileName)) continue;
-            Log.Debug("Datei {Path} wird aufgrund eines Regex-Musters ignoriert", path);
-            return true;
-        }
-        
-        return false;
+        if (!_regexPatterns.Any(regex => regex.IsMatch(fileName))) return false;
+        Log.Debug("Datei {Path} wird aufgrund eines Regex-Musters ignoriert", path);
+        return true;
+
     }
 }

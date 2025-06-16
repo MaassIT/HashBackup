@@ -220,12 +220,13 @@ public class Application(string[] args)
                 // Lese die Ignorier-Datei und ergänze die Muster
                 var fileIgnorePatterns = File.ReadAllLines(ignoreFilePath)
                     .Select(line => line.Trim())
-                    .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith("#"));
+                    .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#'))
+                    .ToArray();
                 
                 ignorePatterns.AddRange(fileIgnorePatterns);
                 
                 Log.Information("Ignorier-Muster aus Datei {Path} geladen: {Count} Muster", 
-                    ignoreFilePath, fileIgnorePatterns.Count());
+                    ignoreFilePath, fileIgnorePatterns.Length);
             }
             catch (Exception ex)
             {
@@ -288,7 +289,7 @@ public class Application(string[] args)
         Log.Information("  Zielverzeichnistiefe: {TargetDirDepth}", config.TargetDirDepth);
         
         // Ignorierte Muster anzeigen
-        if (config.IgnorePatterns.Any())
+        if (config.IgnorePatterns != null && config.IgnorePatterns.Count != 0)
         {
             Log.Information("  Ignorierte Muster: {IgnorePatterns}", string.Join(", ", config.IgnorePatterns));
         }

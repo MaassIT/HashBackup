@@ -146,14 +146,40 @@ public static class FileAttributesUtil
             Log.Debug("Lade Attribute für {FileCount} Dateien und {AttrCount} Attributnamen vor", 
                 filePathsList.Count, attrNamesList.Count);
             
-            Parallel.ForEach(filePathsList, filePath =>
+            // Berechne optimale Batchgröße basierend auf der Anzahl der Dateien und Attribute
+            int optimalBatchSize = CalculateOptimalBatchSize(filePathsList.Count, attrNamesList.Count);
+            
+            // Beschränke die Parallelität auf eine sinnvolle Anzahl
+            int processorCount = Environment.ProcessorCount;
+            var parallelOptions = new ParallelOptions { 
+                MaxDegreeOfParallelism = Math.Max(1, processorCount > 4 ? processorCount - 2 : processorCount / 2) 
+            };
+
+            Log.Debug("Verwende Batchgröße {BatchSize} mit maximal {Threads} parallelen Threads",
+                optimalBatchSize, parallelOptions.MaxDegreeOfParallelism);
+
+            // Verarbeite in Batches, um Überlastung zu vermeiden
+            for (var i = 0; i < filePathsList.Count; i += optimalBatchSize)
             {
-                foreach (var attrName in attrNamesList)
+                var batch = filePathsList.Skip(i).Take(optimalBatchSize).ToList();
+    
+                Parallel.ForEach(batch, parallelOptions, (filePath, loopState) =>
                 {
-                    // GetAttribute speichert das Ergebnis bereits im Cache
-                    GetAttribute(filePath, attrName);
-                }
-            });
+                    try 
+                    {
+                        foreach (var attrName in attrNamesList)
+                        {
+                            GetAttribute(filePath, attrName);
+                        }
+                    }
+                    catch (Exception ex) 
+                    {
+                        // Fehler bei einzelnen Dateien protokollieren, aber weitermachen
+                        Log.Warning("Fehler beim Laden der Attribute für {FilePath}: {Error}", 
+                            filePath, ex.Message);
+                    }
+                });
+            }
         }
         catch (Exception ex)
         {
@@ -186,4 +212,21 @@ public static class FileAttributesUtil
     );
 #endif
     
+    // Neue Methode zur Berechnung der optimalen Batchgröße
+    private static int CalculateOptimalBatchSize(int fileCount, int attrCount)
+    {
+        // Basis-Batchgröße
+        int baseBatchSize = 1000;
+        
+        // Reduziere Batchgröße bei vielen Attributen, erhöhe bei wenigen
+        double attributeFactor = Math.Max(1.0, 5.0 / Math.Max(1, attrCount));
+        
+        // Berücksichtige die Gesamtanzahl der Dateien
+        double sizeFactor = Math.Min(1.0, (double)fileCount / 10000);
+        
+        int result = (int)(baseBatchSize * attributeFactor * (0.5 + sizeFactor));
+        
+        // Stelle sicher, dass die Batchgröße sinnvoll begrenzt ist
+        return Math.Max(100, Math.Min(result, 5000));
+    }
 }

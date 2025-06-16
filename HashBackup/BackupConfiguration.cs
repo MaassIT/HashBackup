@@ -63,7 +63,7 @@ public class BackupConfiguration
     /// <summary>
     /// Liste der zu ignorierenden Dateien und Verzeichnismuster (z.B. *.tmp, .DS_Store, node_modules/)
     /// </summary>
-    public List<string> IgnorePatterns { get; init; } = [];
+    public List<string>? IgnorePatterns { get; init; } = [];
 
     /// <summary>
     /// Pfad zu einer .gitignore-ähnlichen Datei mit Ignorier-Mustern
