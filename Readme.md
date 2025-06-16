@@ -16,10 +16,12 @@
 - 📝 **Backup-Metadaten als CSV**
 - 🏗️ **Konfigurierbar per INI oder JSON**
 - 🚫 **Flexible Ignore-Patterns** für Dateien und Verzeichnisse (ähnlich .gitignore)
+- 📁 **Unterstützung mehrerer Quellverzeichnisse** für kombinierte Backups
+- 🔄 **Zuverlässige Wiederholungslogik** bei Netzwerkproblemen
 
 ## 🏗️ Installation
 
-1. **.NET 6/7/8/9 SDK installieren** ([Download](https://dotnet.microsoft.com/download))
+1. **.NET 9 SDK installieren** ([Download](https://dotnet.microsoft.com/download))
 2. Repository klonen:
    ```bash
    git clone https://github.com/deinuser/HashBackup.git
@@ -51,7 +53,7 @@ dotnet run --project HashBackup/HashBackup.csproj /pfad/zur/backup_config.json
 ```ini
 [DEFAULT]
 BACKUP_TYPE = azure
-SOURCE_FOLDER = /daten
+SOURCE_FOLDER = /daten,/weitere-daten,/noch-mehr-daten
 BACKUP_METADATA_FILE = /backup/metadata.csv
 SAFE_MODE = true
 DRY_RUN = false
@@ -61,6 +63,8 @@ LOCK_FILE = /var/lock/backup.lock
 TARGET_DIR_DEPTH = 3
 IGNORE = *.tmp,*.bak,.DS_Store,node_modules,.git
 IGNORE_FILE = /pfad/zur/ignore_datei.txt
+MAX_RETRIES = 3
+RETRY_DELAY = 5
 
 [AZURE]
 STORAGE_ACCOUNT = meinaccount
@@ -74,7 +78,7 @@ CONTAINER = mein-container
 {
   "DEFAULT": {
     "BACKUP_TYPE": "azure",
-    "SOURCE_FOLDER": "/daten",
+    "SOURCE_FOLDER": ["/daten", "/weitere-daten", "/noch-mehr-daten"],
     "BACKUP_METADATA_FILE": "/backup/metadata.csv",
     "SAFE_MODE": "true",
     "DRY_RUN": "false",
@@ -83,7 +87,9 @@ CONTAINER = mein-container
     "LOCK_FILE": "/var/lock/backup.lock",
     "TARGET_DIR_DEPTH": "3",
     "IGNORE": "*.tmp,*.bak,.DS_Store,node_modules,.git",
-    "IGNORE_FILE": "/pfad/zur/ignore_datei.txt"
+    "IGNORE_FILE": "/pfad/zur/ignore_datei.txt",
+    "MAX_RETRIES": "3",
+    "RETRY_DELAY": "5"
   },
   "AZURE": {
     "STORAGE_ACCOUNT": "meinaccount",
@@ -135,6 +141,15 @@ Die Muster unterstützen Wildcards wie `*` und `?`, und es wird nicht mehr zwisc
 
 Neue Backup-Ziele lassen sich durch Implementierung des `IStorageBackend`-Interfaces einfach integrieren.
 
+## 📂 Projektstruktur
+
+HashBackup ist modular aufgebaut und besteht aus folgenden Hauptkomponenten:
+
+- **Services**: Kernfunktionalität für Dateihashing, Metadatenverwaltung und Upload-Koordination
+- **Storage**: Backend-Implementierungen für verschiedene Speicherziele (lokal, Azure)
+- **Utils**: Hilfsfunktionen für Dateisystemoperationen, Locking und Ignore-Muster
+- **PythonTool**: Komplementäres Python-Skript für ähnliche Funktionalität in Python
+
 ## 📋 Kommandozeilen-Parameter
 
 ```bash
@@ -153,6 +168,8 @@ HashBackup <config-file> [optionen]
 | `-i`, `--ignore` | Zu ignorierende Dateien/Verzeichnisse |
 | `-if`, `--ignore-file` | Pfad zu einer Datei mit Ignorier-Mustern |
 | `-ll`, `--log-level` | Log-Level (Verbose, Debug, Information, Warning, Error, Fatal) |
+| `-r`, `--retries` | Maximale Anzahl an Wiederholungen |
+| `-rd`, `--retry-delay` | Verzögerung in Sekunden zwischen Wiederholungen |
 
 ## 🏗️ Geplante Features
 
