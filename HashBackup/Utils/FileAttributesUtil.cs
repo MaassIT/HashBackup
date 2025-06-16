@@ -161,7 +161,7 @@ public static class FileAttributesUtil
             {
                 var batch = filePathsList.Skip(i).Take(optimalBatchSize).ToList();
     
-                Parallel.ForEach(batch, parallelOptions, (filePath, loopState) =>
+                Parallel.ForEach(batch, parallelOptions, (filePath, _) =>
                 {
                     try 
                     {

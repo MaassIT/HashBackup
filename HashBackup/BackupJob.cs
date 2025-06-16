@@ -145,7 +145,7 @@ public class BackupJob
         {
             filesIndiziert++;
             
-            var (fileInfo, fileHash, fileHashMtime, backupMtime, backupMtimeAttr) = fileInfos[filePath];
+            var (fileInfo, fileHash, _, backupMtime, backupMtimeAttr) = fileInfos[filePath];
             
             // Sicherstellen, dass ein Hash vorhanden ist
             if (string.IsNullOrEmpty(fileHash))
