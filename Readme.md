@@ -180,12 +180,22 @@ HashBackup <config-file> [optionen]
 
 ## 🛡️ Lizenz
 
-Dieses Projekt steht unter der **Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0) Lizenz**.
+Dieses Projekt verwendet ein **Dual-Licensing-Modell**:
 
-➡️ **Das bedeutet:**
-- ✅ Freie private Nutzung
-- ❌ Kommerzielle Nutzung ist untersagt
-- 📜 Mehr Informationen: [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)
+### 🏠 Kostenlose Variante
+- **Für private Nutzung und nicht-kommerzielle Zwecke**
+- Unter der **GNU Affero General Public License v3 (AGPL-3.0)**
+- Alle Änderungen müssen öffentlich zugänglich gemacht werden
+
+### 🏢 Kommerzielle Variante
+- **Für Unternehmen und kommerzielle Anwendungen**
+- Kostenpflichtige Lizenz erforderlich
+- Kontaktiere mich für Lizenzoptionen und Preise
+- Bietet zusätzliche Funktionen und professionellen Support
+
+➡️ Die kostenlose Version darf in Unternehmen **nicht** ohne entsprechende kommerzielle Lizenz eingesetzt werden.
+
+📜 Mehr Informationen: [GNU AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html)
 
 ---
 
