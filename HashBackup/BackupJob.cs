@@ -1,6 +1,7 @@
 namespace HashBackup;
 
 using Services;
+using Utils;
 
 /// <summary>
 /// Hauptklasse für die Ausführung eines Backup-Jobs
@@ -12,6 +13,7 @@ public class BackupJob
     private readonly FileHashService _fileHashService;
     private readonly MetadataManager _metadataManager;
     private readonly UploadCoordinator _uploadCoordinator;
+    private readonly IgnorePatternMatcher _ignoreMatcher;
     
     // Standardwert für parallele Hash-Berechnungen
     private readonly int _parallelHashCalculations;
@@ -40,6 +42,9 @@ public class BackupJob
             config.DryRun,
             config.JobName);
         
+        // Einen einzigen Ignore-Pattern-Matcher für alle Muster initialisieren
+        _ignoreMatcher = new IgnorePatternMatcher(config.IgnorePatterns);
+        
         // Parallele Hash-Berechnungen auf Basis der CPU-Kerne festlegen
         _parallelHashCalculations = Math.Max(1, Environment.ProcessorCount - 1);
     }
@@ -57,14 +62,34 @@ public class BackupJob
         var filesToUpload = 0;
         var hashesToUpload = new HashSet<string>();
 
-        // Liste der zu ignorierenden Dateien
-        var ignoredFilesList = _config.IgnoredFiles;
+        // Alle Dateien aus den Quellverzeichnissen sammeln und dabei Dateien und Verzeichnisse 
+        // anhand der Ignorier-Muster filtern
+        var allFiles = new List<string>();
         
-        // Alle Dateien aus den Quellverzeichnissen sammeln
-        var allFiles = _config.SourceFolders.SelectMany(sourceFolder => Directory.GetFiles(sourceFolder, "*", SearchOption.AllDirectories)
-            .Where(f => !ignoredFilesList.Contains(Path.GetFileName(f)))
-            .OrderBy(Path.GetDirectoryName))
-            .ToList();
+        foreach (var sourceFolder in _config.SourceFolders)
+        {
+            try
+            {
+                var sourceDir = new DirectoryInfo(sourceFolder);
+                if (!sourceDir.Exists)
+                {
+                    Log.Warning("Quellverzeichnis existiert nicht: {SourceFolder}", sourceFolder);
+                    continue;
+                }
+                
+                // Sammle alle Dateien rekursiv, filtere aber nach den Ignorier-Mustern
+                var files = CollectFilesWithIgnorePatterns(sourceDir);
+                allFiles.AddRange(files);
+                
+                Log.Information("Dateien aus {SourceFolder} hinzugefügt: {Count} Dateien", sourceFolder, files.Count);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Fehler beim Sammeln der Dateien aus {SourceFolder}", sourceFolder);
+            }
+        }
+        
+        Log.Information("Insgesamt {Count} Dateien zum Backup vorgemerkt", allFiles.Count);
 
         // Liste der Attribute, die wir für jede Datei benötigen
         var attributesToLoad = new[] {
@@ -204,5 +229,57 @@ public class BackupJob
         tasks[1] = _metadataManager.UploadBackupMetadataAsync(_backend, _fileHashService, ct);
 
         Task.WaitAll(tasks, ct);
+    }
+    
+    /// <summary>
+    /// Sammelt alle Dateien unter Berücksichtigung der Ignore-Muster
+    /// </summary>
+    /// <param name="directory">Das zu durchsuchende Verzeichnis</param>
+    /// <returns>Liste der Dateipfade, die nicht ignoriert werden sollen</returns>
+    private List<string> CollectFilesWithIgnorePatterns(DirectoryInfo directory)
+    {
+        var result = new List<string>();
+        
+        try 
+        {
+            // Überspringe ignorierte Verzeichnisse
+            if (_ignoreMatcher.ShouldIgnore(directory.Name) || 
+                _ignoreMatcher.ShouldIgnore(directory.FullName, true))
+            {
+                Log.Debug("Verzeichnis wird ignoriert: {Directory}", directory.FullName);
+                return result;
+            }
+            
+            // Sammle alle Dateien im aktuellen Verzeichnis
+            foreach (var file in directory.EnumerateFiles())
+            {
+                // Überspringe ignorierte Dateien
+                if (_ignoreMatcher.ShouldIgnore(file.Name) || 
+                    _ignoreMatcher.ShouldIgnore(file.FullName, true))
+                {
+                    Log.Debug("Datei wird ignoriert: {File}", file.FullName);
+                    continue;
+                }
+                
+                result.Add(file.FullName);
+            }
+            
+            // Rekursiv in Unterverzeichnissen fortsetzen
+            foreach (var subDir in directory.EnumerateDirectories())
+            {
+                var subDirFiles = CollectFilesWithIgnorePatterns(subDir);
+                result.AddRange(subDirFiles);
+            }
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Log.Warning("Keine Berechtigung für Verzeichnis {Directory}: {Message}", directory.FullName, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Fehler beim Durchsuchen von Verzeichnis {Directory}", directory.FullName);
+        }
+        
+        return result;
     }
 }

@@ -15,6 +15,7 @@
 - 🔒 **Locking-Mechanismus**, um parallele Backups zu verhindern
 - 📝 **Backup-Metadaten als CSV**
 - 🏗️ **Konfigurierbar per INI oder JSON**
+- 🚫 **Flexible Ignore-Patterns** für Dateien und Verzeichnisse (ähnlich .gitignore)
 
 ## 🏗️ Installation
 
@@ -58,6 +59,8 @@ PARALLEL_UPLOADS = 3
 JOB_NAME = NightlyBackup
 LOCK_FILE = /var/lock/backup.lock
 TARGET_DIR_DEPTH = 3
+IGNORE = *.tmp,*.bak,.DS_Store,node_modules,.git
+IGNORE_FILE = /pfad/zur/ignore_datei.txt
 
 [AZURE]
 STORAGE_ACCOUNT = meinaccount
@@ -78,7 +81,9 @@ CONTAINER = mein-container
     "PARALLEL_UPLOADS": "3",
     "JOB_NAME": "NightlyBackup",
     "LOCK_FILE": "/var/lock/backup.lock",
-    "TARGET_DIR_DEPTH": "3"
+    "TARGET_DIR_DEPTH": "3",
+    "IGNORE": "*.tmp,*.bak,.DS_Store,node_modules,.git",
+    "IGNORE_FILE": "/pfad/zur/ignore_datei.txt"
   },
   "AZURE": {
     "STORAGE_ACCOUNT": "meinaccount",
@@ -88,9 +93,66 @@ CONTAINER = mein-container
 }
 ```
 
+### Ignorierte Dateien und Verzeichnisse konfigurieren
+
+HashBackup bietet zwei Möglichkeiten, Dateien und Verzeichnisse vom Backup auszuschließen:
+
+1. **Direkt in der Konfiguration** über die `IGNORE`-Einstellung mit kommagetrennten Mustern:
+   ```ini
+   IGNORE = *.tmp,*.log,node_modules,.git,*.bak
+   ```
+
+2. **Über eine externe Datei** ähnlich einer `.gitignore`-Datei, die in `IGNORE_FILE` angegeben wird:
+   ```ini
+   IGNORE_FILE = /pfad/zur/backupignore.txt
+   ```
+
+   Beispiel für den Inhalt einer Ignore-Datei:
+   ```
+   # Temporäre Dateien ignorieren
+   *.tmp
+   *.bak
+   *.log
+   
+   # Systemdateien
+   .DS_Store
+   Thumbs.db
+   
+   # Verzeichnisse
+   node_modules
+   .git
+   bin/Debug
+   ```
+
+3. **Über die Kommandozeile**:
+   ```bash
+   dotnet run --project HashBackup/HashBackup.csproj config.ini --ignore "*.tmp,*.bak,node_modules" --ignore-file "ignore.txt"
+   ```
+
+Die Muster unterstützen Wildcards wie `*` und `?`, und es wird nicht mehr zwischen Dateien und Verzeichnissen unterschieden - alle Muster werden auf beide angewendet.
+
 ## ⚙️ Erweiterbarkeit
 
 Neue Backup-Ziele lassen sich durch Implementierung des `IStorageBackend`-Interfaces einfach integrieren.
+
+## 📋 Kommandozeilen-Parameter
+
+```bash
+HashBackup <config-file> [optionen]
+```
+
+| Parameter | Beschreibung |
+|-----------|-------------|
+| `-s`, `--source` | Quellverzeichnis(se) für das Backup |
+| `-t`, `--target` | Zielort für das Backup |
+| `-j`, `--job-name` | Name des Backup-Jobs |
+| `-m`, `--metadata` | Pfad zur Metadaten-Datei |
+| `-p`, `--parallel` | Anzahl paralleler Uploads |
+| `-sm`, `--safe-mode` | Safe-Mode aktivieren |
+| `-d`, `--dry-run` | Dry-Run ohne tatsächliche Änderungen |
+| `-i`, `--ignore` | Zu ignorierende Dateien/Verzeichnisse |
+| `-if`, `--ignore-file` | Pfad zu einer Datei mit Ignorier-Mustern |
+| `-ll`, `--log-level` | Log-Level (Verbose, Debug, Information, Warning, Error, Fatal) |
 
 ## 🏗️ Geplante Features
 
@@ -111,5 +173,4 @@ Dieses Projekt steht unter der **Creative Commons Attribution-NonCommercial 4.0 
 ---
 
 **Hinweis:**
-Dieses Tool ist die C#-Portierung des bewährten Python-Backups und wird aktiv weiterentwickelt. Für Fragen, Feature-Wünsche oder Bugreports bitte ein Issue auf Github eröffnen.
-
+Für Fragen, Feature-Wünsche oder Bugreports bitte ein Issue auf Github eröffnen.

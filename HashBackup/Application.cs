@@ -93,7 +93,7 @@ public class Application(string[] args)
         Console.WriteLine("Optionen:");
         Console.WriteLine("  -s, --source <path>      Quellverzeichnis für das Backup");
         Console.WriteLine("  -t, --target <path>      Zielort für das Backup");
-        Console.WriteLine("  -j, --job-name <name>    Name des Backup-Jobs");
+        Console.WriteLine("  -j, --job-name <n>       Name des Backup-Jobs");
         Console.WriteLine("  -tp, --type <type>       Typ des Backups (lokal oder azure)");
         Console.WriteLine("  -m, --metadata <file>    Pfad zur Metadaten-Datei");
         Console.WriteLine("  -p, --parallel <num>     Anzahl paralleler Uploads");
@@ -103,6 +103,8 @@ public class Application(string[] args)
         Console.WriteLine("  -rd, --retry-delay <sec> Verzögerung zwischen Wiederholungen");
         Console.WriteLine("  -dd, --dir-depth <num>   Tiefe der Zielverzeichnisstruktur");
         Console.WriteLine("  -ll, --log-level <level> Log-Level (Verbose, Debug, Information, Warning, Error, Fatal)");
+        Console.WriteLine("  -i, --ignore <patterns>  Zu ignorierende Dateien/Verzeichnisse (z.B. *.tmp,node_modules)");
+        Console.WriteLine("  -if, --ignore-file <file> Pfad zu einer Datei mit Ignorier-Mustern (ähnlich .gitignore)");
         Console.WriteLine();
         Console.WriteLine("Umgebungsvariablen:");
         Console.WriteLine("  HASHBACKUP_DEFAULT__*    Konfigurationsvariablen mit HASHBACKUP_-Prefix");
@@ -198,13 +200,42 @@ public class Application(string[] args)
         var jobName = config.Get("DEFAULT", "JOB_NAME", "Default")!;
         var targetDirDepth = int.TryParse(config.Get("DEFAULT", "TARGET_DIR_DEPTH"), out var tdd) ? tdd : 3;
         
-        // Lade ignorierte Dateien
-        var ignoredFilesStr = config.Get("DEFAULT", "IGNORED_FILES", "");
-        var ignoredFiles = string.IsNullOrWhiteSpace(ignoredFilesStr) 
-            ? new List<string>() 
-            : ignoredFilesStr.Split(',').Select(x => x.Trim()).ToList();
+        // Lade Ignorier-Muster (kommagetrennt)
+        var ignorePatternString = config.Get("DEFAULT", "IGNORE", string.Empty);
+        var ignorePatterns = string.IsNullOrWhiteSpace(ignorePatternString)
+            ? new List<string>()
+            : ignorePatternString.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries)
+                .Select(pattern => pattern.Trim())
+                .Where(pattern => !string.IsNullOrWhiteSpace(pattern))
+                .ToList();
         
-        // Erstelle und gib die Backup-Konfiguration zurück
+        // Pfad zur externen Datei mit Ignorier-Mustern
+        var ignoreFilePath = config.Get("DEFAULT", "IGNORE_FILE");
+        
+        // Wenn eine externe Ignorier-Datei angegeben wurde und existiert, lade die Muster
+        if (!string.IsNullOrWhiteSpace(ignoreFilePath) && File.Exists(ignoreFilePath))
+        {
+            try
+            {
+                // Lese die Ignorier-Datei und ergänze die Muster
+                var fileIgnorePatterns = File.ReadAllLines(ignoreFilePath)
+                    .Select(line => line.Trim())
+                    .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith("#"));
+                
+                ignorePatterns.AddRange(fileIgnorePatterns);
+                
+                Log.Information("Ignorier-Muster aus Datei {Path} geladen: {Count} Muster", 
+                    ignoreFilePath, fileIgnorePatterns.Count());
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Fehler beim Laden der Ignorier-Datei {Path}", ignoreFilePath);
+            }
+        }
+        
+        Log.Information("Konfiguration geladen: {JobName}, {SourceCount} Quellordner, {IgnorePatternCount} Ignorier-Muster", 
+            jobName, sourceFolders.Count, ignorePatterns.Count);
+
         return new BackupConfiguration
         {
             BackupType = backupType,
@@ -218,7 +249,8 @@ public class Application(string[] args)
             RetryDelay = retryDelay,
             JobName = jobName,
             TargetDirDepth = targetDirDepth,
-            IgnoredFiles = ignoredFiles
+            IgnorePatterns = ignorePatterns,
+            IgnoreFile = ignoreFilePath
         };
     }
     
@@ -255,12 +287,10 @@ public class Application(string[] args)
         Log.Information("  Job-Name: {JobName}", config.JobName);
         Log.Information("  Zielverzeichnistiefe: {TargetDirDepth}", config.TargetDirDepth);
         
-        // Ignorierte Dateien anzeigen
-        if (config.IgnoredFiles.Any())
+        // Ignorierte Muster anzeigen
+        if (config.IgnorePatterns.Any())
         {
-            Log.Information("  Ignorierte Dateien: {IgnoredFiles}", string.Join(", ", config.IgnoredFiles));
+            Log.Information("  Ignorierte Muster: {IgnorePatterns}", string.Join(", ", config.IgnorePatterns));
         }
     }
 }
-
-

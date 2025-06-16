@@ -61,7 +61,12 @@ public class BackupConfiguration
     public int TargetDirDepth { get; init; } = 3;
     
     /// <summary>
-    /// Liste der zu ignorierenden Dateien
+    /// Liste der zu ignorierenden Dateien und Verzeichnismuster (z.B. *.tmp, .DS_Store, node_modules/)
     /// </summary>
-    public List<string> IgnoredFiles { get; init; } = [];
+    public List<string> IgnorePatterns { get; init; } = [];
+
+    /// <summary>
+    /// Pfad zu einer .gitignore-ähnlichen Datei mit Ignorier-Mustern
+    /// </summary>
+    public string? IgnoreFile { get; init; }
 }

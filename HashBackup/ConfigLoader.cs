@@ -139,7 +139,11 @@ public class ConfigLoader
             { "-lf", "DEFAULT:LOCK_FILE" },
             { "--lock-file", "DEFAULT:LOCK_FILE" },
             { "-ll", "DEFAULT:LOG_LEVEL" },
-            { "--log-level", "DEFAULT:LOG_LEVEL" }
+            { "--log-level", "DEFAULT:LOG_LEVEL" },
+            { "-i", "DEFAULT:IGNORE" },
+            { "--ignore", "DEFAULT:IGNORE" },
+            { "-if", "DEFAULT:IGNORE_FILE" },
+            { "--ignore-file", "DEFAULT:IGNORE_FILE" }
         };
     }
 
