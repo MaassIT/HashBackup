@@ -54,7 +54,7 @@ public class FileHashService
     {
         var filesToHash = files.Where(kvp => 
             string.IsNullOrEmpty(kvp.Value.HashMtime) || 
-            kvp.Value.HashMtime != kvp.Value.Info.LastWriteTimeUtc.ToFileTimeUtc().ToString() || 
+            kvp.Value.HashMtime != FileAttributesUtil.DateTimeToUnixTimestamp(kvp.Value.Info.LastWriteTimeUtc) || 
             string.IsNullOrEmpty(kvp.Value.Hash)
         ).Select(kvp => kvp.Key).ToList();
 

@@ -20,3 +20,5 @@ finally
 {
     Log.CloseAndFlush();
 }
+
+

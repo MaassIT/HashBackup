@@ -69,7 +69,7 @@ public class UploadCoordinator(
                             FileAttributesUtil.SetAttribute(
                                 item.filePath, 
                                 $"user.{jobName}_backup_mtime", 
-                                new FileInfo(item.filePath).LastWriteTimeUtc.ToFileTimeUtc().ToString());
+                                FileAttributesUtil.DateTimeToUnixTimestamp(new FileInfo(item.filePath).LastWriteTimeUtc));
                             
                             var fileSize = new FileInfo(item.filePath).Length;
                             

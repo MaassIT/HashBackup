@@ -129,35 +129,33 @@ public class BackupJob
                 continue;
             }
             
-            bool uploadRequired = false;
+            var uploadRequired = false;
+            var lastWriteTimeUnixTimestamp = FileAttributesUtil.DateTimeToUnixTimestamp(fileInfo.LastWriteTimeUtc);
             
             if (_config.SafeMode)
             {
-                if (!hashes.TryGetValue(fileHash, out long size) || size != fileInfo.Length)
+                if (!hashes.TryGetValue(fileHash, out var size) || size != fileInfo.Length)
                 {
                     uploadRequired = true;
                 }
                 
                 // Im Safe Mode: Wenn Hash-Upload nicht notwendig, aber die mtime sich geändert hat,
                 // aktualisieren wir den Backup-Zeitstempel
-                if (!uploadRequired && !string.IsNullOrEmpty(fileHashMtime))
+                if (!uploadRequired)
                 {
-                    // Speichere den Unix-Timestamp im Python-Format
-                    var currentUnixTimestamp = FileAttributesUtil.DateTimeToUnixTimestamp(fileInfo.LastWriteTimeUtc);
-                    if (fileHashMtime != currentUnixTimestamp)
+                    // Vergleiche den Backup-mtime mit der aktuellen Datei-mtime
+                    if (string.IsNullOrEmpty(backupMtime) || backupMtime != lastWriteTimeUnixTimestamp)
                     {
                         Log.Debug("Korrigiere Sicherungsstatus für {FilePath}, da sich die Zeit geändert hat", filePath);
-                        FileAttributesUtil.SetAttribute(filePath, backupMtimeAttr, currentUnixTimestamp);
+                        // Aktualisiere den Backup-mtime mit der aktuellen Datei-mtime
+                        FileAttributesUtil.SetAttribute(filePath, backupMtimeAttr, lastWriteTimeUnixTimestamp);
                     }
                 }
             }
             else
             {
-                // Normale Prüfung: Benötigt Upload, wenn Backup-mtime != aktuelle mtime
-                string currentUnixTimestamp = FileAttributesUtil.DateTimeToUnixTimestamp(fileInfo.LastWriteTimeUtc);
-                
                 // Wenn kein Backup-mtime existiert oder die Zeiten nicht übereinstimmen
-                if (string.IsNullOrEmpty(backupMtime) || backupMtime != currentUnixTimestamp)
+                if (string.IsNullOrEmpty(backupMtime) || backupMtime != lastWriteTimeUnixTimestamp)
                 {
                     uploadRequired = true;
                 }
