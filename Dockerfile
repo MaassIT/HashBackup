@@ -10,10 +10,15 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY . .
+
+# Kopiere nur die csproj-Datei für effizientes Layer-Caching
+COPY HashBackup/HashBackup.csproj HashBackup/
 
 # Restore dependencies 
 RUN dotnet restore HashBackup/HashBackup.csproj
+
+# Kopiere den restlichen Code nachdem die Abhängigkeiten wiederhergestellt wurden
+COPY . .
 
 # Build with ReadyToRun instead of AOT for better compatibility
 RUN dotnet publish HashBackup/HashBackup.csproj \
