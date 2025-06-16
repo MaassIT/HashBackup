@@ -25,7 +25,6 @@ public static class FileAttributesUtil
         }
         else
         {
-            // xattr (benötigt ggf. libattr oder Mono.Posix)
             try
             {
                 var bytes = System.Text.Encoding.UTF8.GetBytes(value);
@@ -49,13 +48,12 @@ public static class FileAttributesUtil
     // Konvertiert Unix-Timestamp zu DateTime
     public static DateTime UnixTimestampToDateTime(string timestamp)
     {
-        if (double.TryParse(timestamp, NumberStyles.Any, CultureInfo.InvariantCulture, out var unixTimestamp))
-        {
-            var epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-            return epoch.AddSeconds(unixTimestamp);
-        }
+        if (!double.TryParse(timestamp, NumberStyles.Any, CultureInfo.InvariantCulture, out var unixTimestamp))
+            return DateTime.MinValue;
         
-        return DateTime.MinValue;
+        var epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        return epoch.AddSeconds(unixTimestamp);
+
     }
 
     public static string? GetAttribute(string filePath, string attrName)
@@ -147,10 +145,10 @@ public static class FileAttributesUtil
                 filePathsList.Count, attrNamesList.Count);
             
             // Berechne optimale Batchgröße basierend auf der Anzahl der Dateien und Attribute
-            int optimalBatchSize = CalculateOptimalBatchSize(filePathsList.Count, attrNamesList.Count);
+            var optimalBatchSize = CalculateOptimalBatchSize(filePathsList.Count, attrNamesList.Count);
             
             // Beschränke die Parallelität auf eine sinnvolle Anzahl
-            int processorCount = Environment.ProcessorCount;
+            var processorCount = Environment.ProcessorCount;
             var parallelOptions = new ParallelOptions { 
                 MaxDegreeOfParallelism = Math.Max(1, processorCount > 4 ? processorCount - 2 : processorCount / 2) 
             };
@@ -216,15 +214,15 @@ public static class FileAttributesUtil
     private static int CalculateOptimalBatchSize(int fileCount, int attrCount)
     {
         // Basis-Batchgröße
-        int baseBatchSize = 1000;
+        const int baseBatchSize = 1000;
         
         // Reduziere Batchgröße bei vielen Attributen, erhöhe bei wenigen
-        double attributeFactor = Math.Max(1.0, 5.0 / Math.Max(1, attrCount));
+        var attributeFactor = Math.Max(1.0, 5.0 / Math.Max(1, attrCount));
         
         // Berücksichtige die Gesamtanzahl der Dateien
-        double sizeFactor = Math.Min(1.0, (double)fileCount / 10000);
+        var sizeFactor = Math.Min(1.0, (double)fileCount / 10000);
         
-        int result = (int)(baseBatchSize * attributeFactor * (0.5 + sizeFactor));
+        var result = (int)(baseBatchSize * attributeFactor * (0.5 + sizeFactor));
         
         // Stelle sicher, dass die Batchgröße sinnvoll begrenzt ist
         return Math.Max(100, Math.Min(result, 5000));
