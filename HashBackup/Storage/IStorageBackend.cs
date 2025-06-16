@@ -3,6 +3,11 @@ namespace HashBackup.Storage
     public interface IStorageBackend
     {
         /// <summary>
+        /// Registriert sensible Daten dieses Backends, die in Logs und Ausgaben maskiert werden sollen
+        /// </summary>
+        void RegisterSensitiveData();
+
+        /// <summary>
         /// Lädt alle bekannten Hashes vom Ziel (Azure/Local/etc.) und gibt sie als Dictionary zurück.
         /// </summary>
         Task<Dictionary<string, long>> FetchHashesAsync(CancellationToken ct = default);

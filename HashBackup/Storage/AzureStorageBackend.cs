@@ -10,9 +10,12 @@ namespace HashBackup.Storage
     {
         private readonly BlobContainerClient _containerClient;
         private static readonly TimeSpan DefaultUploadTimeout = TimeSpan.FromMinutes(30);
+        private readonly string _accountKey;
 
         public AzureStorageBackend(string accountName, string accountKey, string container)
         {
+            _accountKey = accountKey;
+            
             // Angepasste Client-Optionen für größere Dateien
             var clientOptions = new BlobClientOptions
             {
@@ -32,6 +35,20 @@ namespace HashBackup.Storage
                 clientOptions
             );
             _containerClient = blobServiceClient.GetBlobContainerClient(container);
+            
+            // Registriere den Schlüssel sofort beim Erstellen der Instanz
+            RegisterSensitiveData();
+        }
+        
+        /// <summary>
+        /// Registriert sensible Daten dieses Backends, die in Logs und Ausgaben maskiert werden sollen
+        /// </summary>
+        public void RegisterSensitiveData()
+        {
+            // Azure Storage Key als Secret registrieren
+            Utils.SensitiveDataManager.RegisterSecret(_accountKey);
+            
+            Log.Debug("Azure Storage Backend: Secret-Daten registriert");
         }
 
         public async Task<Dictionary<string, long>> FetchHashesAsync(CancellationToken ct = default)

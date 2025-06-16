@@ -4,6 +4,15 @@ public class LocalStorageBackend(string path) : IStorageBackend
 {
     private const string AttrNameMd5HashValue = "user.md5_hash_value";
 
+    /// <summary>
+    /// Registriert sensible Daten dieses Backends, die in Logs und Ausgaben maskiert werden sollen
+    /// </summary>
+    public void RegisterSensitiveData()
+    {
+        // Bei LocalStorageBackend gibt es keine sensitiven Daten zum Registrieren
+        Log.Debug("Lokales Storage Backend: Keine sensiblen Daten zu registrieren");
+    }
+
     public async Task<Dictionary<string, long>> FetchHashesAsync(CancellationToken ct = default)
     {
         var hashes = new Dictionary<string, long>();

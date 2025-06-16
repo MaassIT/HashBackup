@@ -81,7 +81,7 @@ public class Application(string[] args)
     /// <summary>
     /// Zeigt die Hilfe-Informationen
     /// </summary>
-    private void ShowHelp()
+    private static void ShowHelp()
     {
         Console.WriteLine("HashBackup - Tool zum Hashbasierten Backup von Dateien");
         Console.WriteLine("Verwendung: HashBackup <config-file> [optionen]");
@@ -120,14 +120,21 @@ public class Application(string[] args)
     {
         var logLevel = ParseLogLevel(logLevelString);
         
-        Log.Logger = new LoggerConfiguration()
+        // Logger mit SensitiveDataDestructurer konfigurieren, um sensible Daten zu maskieren
+        var loggerConfig = new LoggerConfiguration()
             .MinimumLevel.Is(logLevel)
             .WriteTo.Console(
                 outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
-            .Enrich.FromLogContext()
+            .Enrich.FromLogContext();
+            
+        // Logger mit SensitiveDataDestructurer einrichten
+        var logger = loggerConfig.CreateLogger();
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Is(logLevel)
+            .WriteTo.Sink(new SensitiveDataDestructurer(logger))
             .CreateLogger();
         
-        Log.Information("Logger mit Log-Level {LogLevel} konfiguriert", logLevelString);
+        Log.Information("Logger mit Log-Level {LogLevel} und Schutz sensibler Daten konfiguriert", logLevelString);
     }
     
     /// <summary>

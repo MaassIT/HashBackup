@@ -202,13 +202,42 @@ public class ConfigLoader
             {
                 var key = item.Key.Replace(section + ":", "");
                 if (string.IsNullOrEmpty(key)) continue;
+                
+                var value = item.Value!;
+                
+                // Sensible Werte maskieren (z.B. API-Keys, Tokens, Passwörter)
+                // Wert durch Platzhalter ersetzen
+                value = IsSensitiveKey(key) ? "***SECRET***" :
+                    // Maskiere trotzdem sensible Daten, die vielleicht im Wert enthalten sind
+                    SensitiveDataManager.MaskSensitiveData(value);
+                
                 var source = GetConfigSource(section, key);
-                result.Add($"{key}={item.Value} ({source})");
+                result.Add($"{key}={value} ({source})");
             }
             result.Add("");
         }
         
         return result;
+    }
+    
+    /// <summary>
+    /// Prüft, ob ein Konfigurationsschlüssel sensible Daten enthält und maskiert werden sollte
+    /// </summary>
+    private static bool IsSensitiveKey(string key)
+    {
+        // Liste von Schlüsselnamen, die als sensibel eingestuft werden
+        var sensitiveKeyPatterns = new[]
+        {
+            "key",
+            "secret",
+            "password",
+            "token",
+            "credential",
+            "apikey"
+        };
+        
+        return sensitiveKeyPatterns.Any(pattern => 
+            key.Contains(pattern, StringComparison.OrdinalIgnoreCase));
     }
     
     private List<string> GetAllSections()
