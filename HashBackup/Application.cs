@@ -1,3 +1,6 @@
+using HashBackup.Commands;
+using HashBackup.Recovery;
+
 namespace HashBackup;
 
 /// <summary>
@@ -11,57 +14,65 @@ public class Application(string[] args)
     /// <summary>
     /// Führt die Anwendung aus
     /// </summary>
-    public async Task RunAsync()
+    public async Task<int> RunAsync()
     {
         try
         {
             // Hilfe anzeigen, wenn keine Argumente vorhanden sind oder Hilfe angefordert wird
-            if (args.Length < 1 || args[0] == "--help" || args[0] == "-h")
+            if (args.Length < 1 || args.Contains("--help", StringComparer.OrdinalIgnoreCase) || args.Contains("-h", StringComparer.OrdinalIgnoreCase))
             {
                 ShowHelp();
-                return;
+                return 0;
             }
 
-            var configPath = args[0];
-            Log.Information("Starte HashBackup mit Konfiguration: {ConfigPath}", configPath);
-            
-            // Entferne den ersten Parameter (configPath) aus den Args für die weitere Verarbeitung
-            var configArgs = args.Length > 1 ? args.Skip(1).ToArray() : [];
-            _config = new ConfigLoader(configPath, configArgs);
-            
+            var commandLine = CommandLineParser.Parse(args);
+            Log.Information(
+                "Starte HashBackup-Befehl {Command} mit Konfiguration: {ConfigPath}",
+                commandLine.Command,
+                commandLine.ConfigPath);
+            _config = new ConfigLoader(commandLine.ConfigPath, commandLine.ConfigArguments);
+
             // Rekonfiguriere den Logger mit dem konfigurierten Log-Level
             var logLevel = _config.Get("DEFAULT", "LOG_LEVEL", "Information")!;
             ConfigureLogger(logLevel);
-            
+
             // Backup-Konfiguration laden
             _backupConfig = LoadBackupConfiguration(_config);
             if (_backupConfig == null)
             {
-                return;
+                throw new InvalidOperationException("Die Backup-Konfiguration ist ungültig.");
             }
-            
+
             // Backup-Konfiguration protokollieren
             LogBackupConfiguration(_backupConfig);
-            
+
+            // Erstelle das Backend. Restore und Verify benötigen zusätzlich den
+            // IReadableStorageBackend-Vertrag, bestehende Backup-Backends bleiben kompatibel.
+            var backend = StorageBackendFactory.Create(_config);
+            if (commandLine.Command != HashBackupCommand.Backup)
+            {
+                return await RunRecoveryCommandAsync(commandLine, backend, _backupConfig);
+            }
+
             // Prüfe und setze den Lock, damit das Backup nicht mehrfach gleichzeitig läuft
             using var fileLock = new FileLock(_backupConfig.LockFilePath);
             if (!fileLock.TryAcquireLock())
             {
                 Log.Error("Eine andere Instanz von HashBackup läuft bereits. Beende Programm...");
-                return;
+                // Ein bereits laufender Cron-Job wurde historisch als sauberer Skip
+                // behandelt. Dieser Exitcode bleibt für bestehende Skripte kompatibel.
+                return 0;
             }
-            
-            Log.Information("Lock erfolgreich gesetzt. Starte Backup...");
-            
-            // Generiere die Konfigurationsdokumentation für die CSV-Datei
-            var configDoku = _config.GenerateConfigDoku(configPath);
 
-            // Erstelle das Backend
-            var backend = StorageBackendFactory.Create(_config);
-            
+            Log.Information("Lock erfolgreich gesetzt. Starte Backup...");
+
+            // Generiere die Konfigurationsdokumentation für die CSV-Datei
+            var configDoku = _config.GenerateConfigDoku(commandLine.ConfigPath);
+
             // Erstelle und führe Backup-Job aus
             var backupJob = CreateBackupJob(backend, _backupConfig, configDoku);
             await backupJob.RunAsync();
+            return 0;
         }
         catch (Exception ex)
         {
@@ -69,7 +80,48 @@ public class Application(string[] args)
             throw;
         }
     }
-    
+
+    private static async Task<int> RunRecoveryCommandAsync(
+        CommandLineRequest commandLine,
+        IStorageBackend backend,
+        BackupConfiguration config)
+    {
+        if (backend is not IReadableStorageBackend readableBackend)
+        {
+            throw new NotSupportedException("Das konfigurierte Storage-Backend unterstützt Restore/Verify nicht.");
+        }
+
+        var options = new RecoveryOptions(
+            commandLine.MetadataReference,
+            commandLine.Destination,
+            commandLine.DeepVerify,
+            commandLine.Rehydrate,
+            commandLine.RehydrateTier,
+            commandLine.RehydratePriority,
+            commandLine.Overwrite,
+            commandLine.DryRun || config.DryRun);
+        var recoveryService = new RecoveryService(
+            readableBackend,
+            config.TargetDirDepth,
+            config.SourceFolders,
+            config.JobName);
+
+        var result = commandLine.Command switch
+        {
+            HashBackupCommand.Verify => await recoveryService.VerifyAsync(options),
+            HashBackupCommand.Restore => await recoveryService.RestoreAsync(options),
+            _ => throw new ArgumentOutOfRangeException(nameof(commandLine), commandLine.Command, null)
+        };
+
+        if (result.Status == RecoveryStatus.RehydrationPending)
+        {
+            Log.Warning(
+                "Archive-Daten sind noch nicht online. Befehl später unverändert erneut ausführen. Exitcode 2 signalisiert ausstehende Rehydration.");
+        }
+
+        return (int)result.Status;
+    }
+
     /// <summary>
     /// Erstellt eine neue BackupJob-Instanz basierend auf der aktuellen Konfiguration
     /// </summary>
@@ -78,14 +130,18 @@ public class Application(string[] args)
         // Erstelle den BackupJob mit der Konfiguration und den Dokumentationszeilen
         return new BackupJob(backend, config, configDoku);
     }
-    
+
     /// <summary>
     /// Zeigt die Hilfe-Informationen
     /// </summary>
     private static void ShowHelp()
     {
         Console.WriteLine("HashBackup - Tool zum Hashbasierten Backup von Dateien");
-        Console.WriteLine("Verwendung: HashBackup <config-file> [optionen]");
+        Console.WriteLine("Verwendung:");
+        Console.WriteLine("  HashBackup <config-file> [backup-optionen]       # kompatible Backup-Syntax");
+        Console.WriteLine("  HashBackup backup <config-file> [optionen]");
+        Console.WriteLine("  HashBackup verify <config-file> [optionen]");
+        Console.WriteLine("  HashBackup restore <config-file> --destination <pfad> [optionen]");
         Console.WriteLine();
         Console.WriteLine("Parameter:");
         Console.WriteLine("  <config-file>            Pfad zur Konfigurationsdatei (.ini oder .json)");
@@ -107,37 +163,46 @@ public class Application(string[] args)
         Console.WriteLine("  -i, --ignore <patterns>  Zu ignorierende Dateien/Verzeichnisse (z.B. *.tmp,node_modules)");
         Console.WriteLine("  -if, --ignore-file <file> Pfad zu einer Datei mit Ignorier-Mustern (ähnlich .gitignore)");
         Console.WriteLine();
+        Console.WriteLine("Restore-/Verify-Optionen:");
+        Console.WriteLine("  -m, --metadata <ref>     Lokale CSV, Blob-Pfad oder 'latest' (Standard)");
+        Console.WriteLine("  -o, --destination <pfad> Restore-Zielverzeichnis");
+        Console.WriteLine("  --deep                   Inhalte herunterladen und MD5 vollständig prüfen");
+        Console.WriteLine("  --rehydrate              Offline-Blobs kostenpflichtig rehydrieren");
+        Console.WriteLine("  --rehydrate-tier <tier>  Ziel-Tier: hot, cool (Standard) oder cold");
+        Console.WriteLine("  --rehydrate-priority <p> standard (Standard) oder high");
+        Console.WriteLine("  --overwrite              Abweichende vorhandene Restore-Dateien ersetzen");
+        Console.WriteLine();
         Console.WriteLine("Umgebungsvariablen:");
         Console.WriteLine("  HASHBACKUP_DEFAULT__*    Konfigurationsvariablen mit HASHBACKUP_-Prefix");
         Console.WriteLine("  Beispiel: HASHBACKUP_DEFAULT__SOURCE_FOLDER=/path/to/source");
-        
+
         Log.Information("Hilfe zur Verwendung von HashBackup angezeigt");
     }
-    
+
     /// <summary>
     /// Konfiguriert den Logger mit dem angegebenen Log-Level
     /// </summary>
     private void ConfigureLogger(string logLevelString)
     {
         var logLevel = ParseLogLevel(logLevelString);
-        
+
         // Logger mit SensitiveDataDestructurer konfigurieren, um sensible Daten zu maskieren
         var loggerConfig = new LoggerConfiguration()
             .MinimumLevel.Is(logLevel)
             .WriteTo.Console(
                 outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
             .Enrich.FromLogContext();
-            
+
         // Logger mit SensitiveDataDestructurer einrichten
         var logger = loggerConfig.CreateLogger();
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Is(logLevel)
             .WriteTo.Sink(new SensitiveDataDestructurer(logger))
             .CreateLogger();
-        
+
         Log.Information("Logger mit Log-Level {LogLevel} und Schutz sensibler Daten konfiguriert", logLevelString);
     }
-    
+
     /// <summary>
     /// Konvertiert einen String in ein LogEventLevel
     /// </summary>
@@ -156,7 +221,7 @@ public class Application(string[] args)
             _ => LogEventLevel.Information // Standard ist Information
         };
     }
-    
+
     /// <summary>
     /// Lädt die Backup-Konfiguration aus dem Config-Loader
     /// </summary>
@@ -169,7 +234,7 @@ public class Application(string[] args)
             Log.Error("Fehler: BACKUP_TYPE ist nicht gesetzt");
             return null;
         }
-        
+
         // Unterstütze mehrere Quellordner
         var sourceFolderString = config.Get("DEFAULT", "SOURCE_FOLDERS", string.Empty);
         if (string.IsNullOrWhiteSpace(sourceFolderString))
@@ -181,28 +246,28 @@ public class Application(string[] args)
             Log.Error("Fehler: Weder SOURCE_FOLDERS noch SOURCE_FOLDER ist gesetzt");
             return null;
         }
-        
+
         // Parsen der Quellordner aus der Konfiguration (kommagetrennte Liste)
         var sourceFolders = sourceFolderString.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries)
             .Select(folder => folder.Trim())
             .Where(folder => !string.IsNullOrWhiteSpace(folder))
             .ToList();
-        
+
         if (sourceFolders.Count == 0)
         {
             Log.Error("Fehler: Keine gültigen Quellordner angegeben");
             return null;
         }
-        
+
         var lockFilePath = config.Get("DEFAULT", "LOCK_FILE", Path.Combine(Path.GetTempPath(), "hashbackup.lock"))!;
-        
+
         var metadataFile = config.Get("DEFAULT", "BACKUP_METADATA_FILE", "backup_metadata.csv");
         if (string.IsNullOrWhiteSpace(metadataFile))
         {
             Log.Error("Fehler: BACKUP_METADATA_FILE ist nicht gesetzt");
             return null;
         }
-        
+
         // Parse numerische Werte mit Standardwerten
         var parallelUploads = int.TryParse(config.Get("DEFAULT", "PARALLEL_UPLOADS", "1"), out var pu) ? pu : 1;
         var safeMode = config.Get("DEFAULT", "SAFE_MODE", "false")?.ToLower() == "true";
@@ -225,7 +290,7 @@ public class Application(string[] args)
                 targetDirDepth);
             return null;
         }
-        
+
         // Lade Ignorier-Muster (kommagetrennt)
         var ignorePatternString = config.Get("DEFAULT", "IGNORE", string.Empty);
         var ignorePatterns = string.IsNullOrWhiteSpace(ignorePatternString)
@@ -234,10 +299,10 @@ public class Application(string[] args)
                 .Select(pattern => pattern.Trim())
                 .Where(pattern => !string.IsNullOrWhiteSpace(pattern))
                 .ToList();
-        
+
         // Pfad zur externen Datei mit Ignorier-Mustern
         var ignoreFilePath = config.Get("DEFAULT", "IGNORE_FILE", string.Empty);
-        
+
         // Wenn eine externe Ignorier-Datei angegeben wurde und existiert, lade die Muster
         if (!string.IsNullOrWhiteSpace(ignoreFilePath) && File.Exists(ignoreFilePath))
         {
@@ -248,10 +313,10 @@ public class Application(string[] args)
                     .Select(line => line.Trim())
                     .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#'))
                     .ToArray();
-                
+
                 ignorePatterns.AddRange(fileIgnorePatterns);
-                
-                Log.Information("Ignorier-Muster aus Datei {Path} geladen: {Count} Muster", 
+
+                Log.Information("Ignorier-Muster aus Datei {Path} geladen: {Count} Muster",
                     ignoreFilePath, fileIgnorePatterns.Length);
             }
             catch (Exception ex)
@@ -259,8 +324,8 @@ public class Application(string[] args)
                 Log.Warning(ex, "Fehler beim Laden der Ignorier-Datei {Path}", ignoreFilePath);
             }
         }
-        
-        Log.Information("Konfiguration geladen: {JobName}, {SourceCount} Quellordner, {IgnorePatternCount} Ignorier-Muster", 
+
+        Log.Information("Konfiguration geladen: {JobName}, {SourceCount} Quellordner, {IgnorePatternCount} Ignorier-Muster",
             jobName, sourceFolders.Count, ignorePatterns.Count);
 
         return new BackupConfiguration
@@ -280,7 +345,7 @@ public class Application(string[] args)
             IgnoreFile = ignoreFilePath
         };
     }
-    
+
     /// <summary>
     /// Loggt die Backup-Konfiguration
     /// </summary>
@@ -289,7 +354,7 @@ public class Application(string[] args)
         // Logge die Konfigurationsparameter übersichtlich
         Log.Information("Konfigurationsparameter:");
         Log.Information("  Backend-Typ: {BackupType}", config.BackupType);
-        
+
         // Zeige alle Quellordner im Log
         if (config.SourceFolders.Count == 1)
         {
@@ -303,7 +368,7 @@ public class Application(string[] args)
                 Log.Information("    - {SourceFolder}", folder);
             }
         }
-        
+
         Log.Information("  Lock-Datei: {LockFilePath}", config.LockFilePath);
         Log.Information("  Metadaten-Datei: {MetadataFile}", config.MetadataFile);
         Log.Information("  Parallele Uploads: {ParallelUploads}", config.ParallelUploads);
@@ -313,7 +378,7 @@ public class Application(string[] args)
         Log.Information("  Verzögerung bei Wiederholung: {RetryDelay} Sekunden", config.RetryDelay);
         Log.Information("  Job-Name: {JobName}", config.JobName);
         Log.Information("  Zielverzeichnistiefe: {TargetDirDepth}", config.TargetDirDepth);
-        
+
         // Ignorierte Muster anzeigen
         if (config.IgnorePatterns != null && config.IgnorePatterns.Count != 0)
         {

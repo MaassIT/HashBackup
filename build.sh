@@ -7,7 +7,7 @@ set -euo pipefail
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly BUILD_DIR="${SCRIPT_DIR}/builds"
 readonly PROJECT_FILE="HashBackup/HashBackup.csproj"
-readonly TARGET_FRAMEWORK="net9.0"
+readonly TARGET_FRAMEWORK="net10.0"
 readonly CONTAINER_NAME="hashbackup-linux-build-$$"
 
 cleanup() {
@@ -40,7 +40,7 @@ dotnet publish "${PROJECT_FILE}" \
 cp -f "HashBackup/bin/Release/${TARGET_FRAMEWORK}/${MACOS_RID}/publish/HashBackup" \
     "${BUILD_DIR}/HashBackup-macos"
 
-printf '%s\n' 'Kompiliere Linux-x64-Version mit Docker...'
+printf '%s\n' 'Kompiliere Linux-x64-NativeAOT-Version mit Docker...'
 docker build --platform linux/amd64 -t hashbackup-linux-build .
 docker create --platform linux/amd64 --name "${CONTAINER_NAME}" hashbackup-linux-build echo >/dev/null
 docker cp "${CONTAINER_NAME}:/app/publish/HashBackup" "${BUILD_DIR}/HashBackup-linux"

@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Runtime.InteropServices;
 using System.Globalization;
+using System.Runtime.InteropServices;
 
 namespace HashBackup.Utils;
 
@@ -9,12 +9,12 @@ public static class FileAttributesUtil
 {
     // Cache für Attribute, um wiederholte Zugriffe zu vermeiden
     private static readonly ConcurrentDictionary<string, string> AttributeCache = new();
-    
+
     // xattr für macOS/Linux, ADS für Windows
     public static void SetAttribute(string filePath, string attrName, string value)
     {
         var cacheKey = $"{filePath}:{attrName}";
-        
+
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             // NTFS ADS: z.B. file.txt:attrName
@@ -61,7 +61,7 @@ public static class FileAttributesUtil
     {
         if (!double.TryParse(timestamp, NumberStyles.Any, CultureInfo.InvariantCulture, out var unixTimestamp))
             return DateTime.MinValue;
-        
+
         var epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         return epoch.AddSeconds(unixTimestamp);
 
@@ -75,16 +75,16 @@ public static class FileAttributesUtil
         {
             return cachedValue;
         }
-        
+
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             var adsPath = filePath + ":" + attrName;
             var result = File.Exists(adsPath) ? File.ReadAllText(adsPath) : null;
-            
+
             // Cache das Ergebnis
             if (result != null)
                 AttributeCache[cacheKey] = result;
-            
+
             return result;
         }
 
@@ -103,12 +103,12 @@ public static class FileAttributesUtil
             var buffer = new byte[(int)requiredSize];
             var readSize = getxattr(filePath, attrName, buffer, (ulong)buffer.Length);
             if (readSize <= 0) return null;
-            
+
             var result = System.Text.Encoding.UTF8.GetString(buffer[..(int)readSize]);
-            
+
             // Cache das Ergebnis
             AttributeCache[cacheKey] = result;
-            
+
             return result;
 #else
             // Fallback für Windows
@@ -140,7 +140,7 @@ public static class FileAttributesUtil
         }
         return null;
     }
-    
+
     /// <summary>
     /// Lädt Attribute für mehrere Dateien in einer Batch-Operation vor
     /// </summary>
@@ -156,17 +156,18 @@ public static class FileAttributesUtil
         {
             var filePathsList = filePaths.ToList();
             var attrNamesList = attrNames.ToList();
-            
-            Log.Debug("Lade Attribute für {FileCount} Dateien und {AttrCount} Attributnamen vor", 
+
+            Log.Debug("Lade Attribute für {FileCount} Dateien und {AttrCount} Attributnamen vor",
                 filePathsList.Count, attrNamesList.Count);
-            
+
             // Berechne optimale Batchgröße basierend auf der Anzahl der Dateien und Attribute
             var optimalBatchSize = CalculateOptimalBatchSize(filePathsList.Count, attrNamesList.Count);
-            
+
             // Beschränke die Parallelität auf eine sinnvolle Anzahl
             var processorCount = Environment.ProcessorCount;
-            var parallelOptions = new ParallelOptions { 
-                MaxDegreeOfParallelism = Math.Max(1, processorCount > 4 ? processorCount - 2 : processorCount / 2) 
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, processorCount > 4 ? processorCount - 2 : processorCount / 2)
             };
 
             Log.Debug("Verwende Batchgröße {BatchSize} mit maximal {Threads} parallelen Threads",
@@ -176,20 +177,20 @@ public static class FileAttributesUtil
             for (var i = 0; i < filePathsList.Count; i += optimalBatchSize)
             {
                 var batch = filePathsList.Skip(i).Take(optimalBatchSize).ToList();
-    
+
                 Parallel.ForEach(batch, parallelOptions, (filePath, _) =>
                 {
-                    try 
+                    try
                     {
                         foreach (var attrName in attrNamesList)
                         {
                             GetAttribute(filePath, attrName);
                         }
                     }
-                    catch (Exception ex) 
+                    catch (Exception ex)
                     {
                         // Fehler bei einzelnen Dateien protokollieren, aber weitermachen
-                        Log.Warning("Fehler beim Laden der Attribute für {FilePath}: {Error}", 
+                        Log.Warning("Fehler beim Laden der Attribute für {FilePath}: {Error}",
                             filePath, ex.Message);
                     }
                 });
@@ -225,21 +226,21 @@ public static class FileAttributesUtil
         int options = 0
     );
 #endif
-    
+
     // Neue Methode zur Berechnung der optimalen Batchgröße
     private static int CalculateOptimalBatchSize(int fileCount, int attrCount)
     {
         // Basis-Batchgröße
         const int baseBatchSize = 1000;
-        
+
         // Reduziere Batchgröße bei vielen Attributen, erhöhe bei wenigen
         var attributeFactor = Math.Max(1.0, 5.0 / Math.Max(1, attrCount));
-        
+
         // Berücksichtige die Gesamtanzahl der Dateien
         var sizeFactor = Math.Min(1.0, (double)fileCount / 10000);
-        
+
         var result = (int)(baseBatchSize * attributeFactor * (0.5 + sizeFactor));
-        
+
         // Stelle sicher, dass die Batchgröße sinnvoll begrenzt ist
         return Math.Max(100, Math.Min(result, 5000));
     }

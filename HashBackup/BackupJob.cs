@@ -14,10 +14,10 @@ public class BackupJob
     private readonly MetadataManager _metadataManager;
     private readonly UploadCoordinator _uploadCoordinator;
     private readonly IgnorePatternMatcher _ignoreMatcher;
-    
+
     // Standardwert für parallele Hash-Berechnungen
     private readonly int _parallelHashCalculations;
-    
+
     public BackupJob(
         IStorageBackend backend,
         BackupConfiguration config,
@@ -30,9 +30,9 @@ public class BackupJob
         // Services initialisieren
         _fileHashService = new FileHashService();
         _metadataManager = new MetadataManager(
-            config.MetadataFile, 
-            configDoku1, 
-            config.JobName, 
+            config.MetadataFile,
+            configDoku1,
+            config.JobName,
             config.DryRun);
         _uploadCoordinator = new UploadCoordinator(
             backend,
@@ -41,10 +41,10 @@ public class BackupJob
             config.RetryDelay,
             config.DryRun,
             config.JobName);
-        
+
         // Einen einzigen Ignore-Pattern-Matcher für alle Muster initialisieren
         _ignoreMatcher = new IgnorePatternMatcher(config.IgnorePatterns);
-        
+
         // Parallele Hash-Berechnungen auf Basis der CPU-Kerne festlegen
         _parallelHashCalculations = Math.Max(1, Environment.ProcessorCount - 1);
     }
@@ -56,7 +56,7 @@ public class BackupJob
     {
         // Starte das Abrufen der Hashes vom Backend asynchron, damit es parallel zur weiteren Verarbeitung läuft
         var hashesTask = _config.SafeMode ? _backend.FetchHashesAsync(ct) : Task.FromResult(new Dictionary<string, long>());
-        
+
         var uploadQueue = new ConcurrentQueue<UploadWorkItem>();
         var filesIndiziert = 0;
         var filesToUpload = 0;
@@ -65,7 +65,7 @@ public class BackupJob
         // Alle Dateien aus den Quellverzeichnissen sammeln und dabei Dateien und Verzeichnisse 
         // anhand der Ignorier-Muster filtern
         var allFiles = new List<string>();
-        
+
         foreach (var sourceFolder in _config.SourceFolders)
         {
             try
@@ -76,11 +76,11 @@ public class BackupJob
                     Log.Warning("Quellverzeichnis existiert nicht: {SourceFolder}", sourceFolder);
                     continue;
                 }
-                
+
                 // Sammle alle Dateien rekursiv, filtere aber nach den Ignorier-Mustern
                 var files = CollectFilesWithIgnorePatterns(sourceDir, isSourceRoot: true);
                 allFiles.AddRange(files);
-                
+
                 Log.Information("Dateien aus {SourceFolder} hinzugefügt: {Count} Dateien", sourceFolder, files.Count);
             }
             catch (Exception ex)
@@ -88,7 +88,7 @@ public class BackupJob
                 Log.Error(ex, "Fehler beim Sammeln der Dateien aus {SourceFolder}", sourceFolder);
             }
         }
-        
+
         Log.Information("Insgesamt {Count} Dateien zum Backup vorgemerkt", allFiles.Count);
 
         // Liste der Attribute, die wir für jede Datei benötigen
@@ -97,29 +97,29 @@ public class BackupJob
             "user.md5_hash_mtime",
             $"user.{_config.JobName}_backup_mtime"
         };
-        
+
         // Vorladen aller Attribute für alle Dateien - deutlich schneller als einzelne Abfragen
         Log.Information("Lade Dateiattribute für {Count} Dateien vor...", allFiles.Count);
         var startTime = DateTime.Now;
         FileAttributesUtil.PreloadAttributes(allFiles, attributesToLoad);
-        
-        Log.Information("Dateiattribute für {Count} Dateien in {ElapsedMs}ms geladen", 
+
+        Log.Information("Dateiattribute für {Count} Dateien in {ElapsedMs}ms geladen",
             allFiles.Count, (DateTime.Now - startTime).TotalMilliseconds);
 
         // Vorbereitung für parallele Hash-Berechnung
         var fileInfos = new ConcurrentDictionary<string, (FileInfo Info, string? Hash, string? HashMtime, string? BackupMtime, string BackupMtimeAttr)>();
-        
+
         Log.Information("Rufe Dateiattribute und Hashes ab für {Count} Dateien", allFiles.Count);
-        
+
         // Vorbereiten der Dateien zur parallelen Verarbeitung - jetzt deutlich schneller dank Cache
         foreach (var filePath in allFiles)
         {
             var fileInfo = new FileInfo(filePath);
             var backupMtimeAttr = $"user.{_config.JobName}_backup_mtime";
-            
+
             // Speichere grundlegende Dateiinformationen
             fileInfos[filePath] = (
-                fileInfo, 
+                fileInfo,
                 FileAttributesUtil.GetAttribute(filePath, "user.md5_hash_value"),
                 FileAttributesUtil.GetAttribute(filePath, "user.md5_hash_mtime"),
                 FileAttributesUtil.GetAttribute(filePath, backupMtimeAttr),
@@ -128,15 +128,15 @@ public class BackupJob
         }
 
         // Starten der parallelen Hash-Berechnung mit dem FileHashService
-        Log.Information("Starte parallele Hash-Berechnung für {Count} Dateien mit {ThreadCount} Threads", 
+        Log.Information("Starte parallele Hash-Berechnung für {Count} Dateien mit {ThreadCount} Threads",
             allFiles.Count, _parallelHashCalculations);
-            
+
         await _fileHashService.CalculateHashesInParallelAsync(
             fileInfos,
             _parallelHashCalculations,
             ct,
             persistComputedHashes: !_config.DryRun);
-        
+
         // Warte auf das Abrufen der Hashes vom Backend, falls es noch nicht abgeschlossen ist
         var hashes = await hashesTask;
         Log.Information("Hash-Abruf vom Backend abgeschlossen: {Count} Hashes gefunden", hashes.Count);
@@ -148,9 +148,9 @@ public class BackupJob
         foreach (var filePath in allFiles)
         {
             filesIndiziert++;
-            
+
             var (fileInfo, fileHash, fileHashMtime, backupMtime, backupMtimeAttr) = fileInfos[filePath];
-            
+
             // Sicherstellen, dass ein Hash vorhanden ist
             if (string.IsNullOrEmpty(fileHash))
             {
@@ -166,17 +166,17 @@ public class BackupJob
                 Log.Warning("Ungültiger gespeicherter Hash für Datei {FilePath}, überspringe", filePath);
                 continue;
             }
-            
+
             var uploadRequired = false;
             var lastWriteTimeUnixTimestamp = FileAttributesUtil.DateTimeToUnixTimestamp(fileInfo.LastWriteTimeUtc);
-            
+
             if (_config.SafeMode)
             {
                 if (!hashes.TryGetValue(fileHash, out var size) || size != fileInfo.Length)
                 {
                     uploadRequired = true;
                 }
-                
+
                 // Im Safe Mode: Wenn Hash-Upload nicht notwendig, aber die mtime sich geändert hat,
                 // aktualisieren wir den Backup-Zeitstempel
                 if (!uploadRequired)
@@ -207,7 +207,7 @@ public class BackupJob
 
             if (fileHash.StartsWith("SYM-", StringComparison.Ordinal))
                 uploadRequired = false;
-            
+
             if (uploadRequired && !hashesToUpload.Contains(fileHash))
             {
                 // Zielpfad wie im Python-Tool: z.B. a/b/c/hash.ext für targetDirDepth=3
@@ -255,7 +255,7 @@ public class BackupJob
                 $"Backup unvollständig: {_uploadCoordinator.GetFailedFileCount()} Datendateien fehlgeschlagen, Metadaten-Upload erfolgreich: {metadataUploaded}.");
         }
     }
-    
+
     /// <summary>
     /// Sammelt alle Dateien unter Berücksichtigung der Ignore-Muster
     /// </summary>
@@ -264,8 +264,8 @@ public class BackupJob
     private List<string> CollectFilesWithIgnorePatterns(DirectoryInfo directory, bool isSourceRoot = false)
     {
         var result = new List<string>();
-        
-        try 
+
+        try
         {
             // Directory symlinks can escape the configured source tree or create cycles.
             // An explicitly configured source root remains valid; nested links are skipped.
@@ -276,27 +276,27 @@ public class BackupJob
             }
 
             // Überspringe ignorierte Verzeichnisse
-            if (_ignoreMatcher.ShouldIgnore(directory.Name) || 
+            if (_ignoreMatcher.ShouldIgnore(directory.Name) ||
                 _ignoreMatcher.ShouldIgnore(directory.FullName, true))
             {
                 Log.Debug("Verzeichnis wird ignoriert: {Directory}", directory.FullName);
                 return result;
             }
-            
+
             // Sammle alle Dateien im aktuellen Verzeichnis
             foreach (var file in directory.EnumerateFiles())
             {
                 // Überspringe ignorierte Dateien
-                if (_ignoreMatcher.ShouldIgnore(file.Name) || 
+                if (_ignoreMatcher.ShouldIgnore(file.Name) ||
                     _ignoreMatcher.ShouldIgnore(file.FullName, true))
                 {
                     Log.Debug("Datei wird ignoriert: {File}", file.FullName);
                     continue;
                 }
-                
+
                 result.Add(file.FullName);
             }
-            
+
             // Rekursiv in Unterverzeichnissen fortsetzen
             foreach (var subDir in directory.EnumerateDirectories())
             {
@@ -312,7 +312,7 @@ public class BackupJob
         {
             Log.Error(ex, "Fehler beim Durchsuchen von Verzeichnis {Directory}", directory.FullName);
         }
-        
+
         return result;
     }
 }

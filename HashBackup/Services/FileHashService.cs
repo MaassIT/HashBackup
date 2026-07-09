@@ -18,22 +18,24 @@ public class FileHashService
         {
             // Bei symbolischen Links erfassen wir das tatsächliche Ziel
             string targetPath;
-            try {
+            try
+            {
                 // ResolveLinkTarget gibt den tatsächlichen Zielpfad des Symlinks zurück
                 targetPath = File.ResolveLinkTarget(filePath, false)?.FullName ?? "Ziel nicht verfügbar";
                 Log.Debug("Symbolischer Link erkannt: {FilePath} -> {TargetPath}", filePath, targetPath);
             }
-            catch (Exception ex) {
+            catch (Exception ex)
+            {
                 Log.Warning(ex, "Konnte das Ziel des symbolischen Links {FilePath} nicht auflösen", filePath);
                 targetPath = "Ziel nicht verfügbar";
             }
-            
+
             // Zielpfad Base64-kodieren, um ihn sicher im Hash zu speichern
             var targetPathBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(targetPath));
             // "SYM-" als Prefix für symbolische Links, gefolgt von Base64-kodiertem Zielpfad
             return $"SYM-{targetPathBase64}";
         }
-        
+
         // Normale Dateien wie bisher behandeln
         using var md5 = System.Security.Cryptography.MD5.Create();
         await using var stream = File.OpenRead(filePath);
@@ -53,27 +55,27 @@ public class FileHashService
         CancellationToken ct = default,
         bool persistComputedHashes = true)
     {
-        var filesToHash = files.Where(kvp => 
-            string.IsNullOrEmpty(kvp.Value.HashMtime) || 
-            kvp.Value.HashMtime != FileAttributesUtil.DateTimeToUnixTimestamp(kvp.Value.Info.LastWriteTimeUtc) || 
+        var filesToHash = files.Where(kvp =>
+            string.IsNullOrEmpty(kvp.Value.HashMtime) ||
+            kvp.Value.HashMtime != FileAttributesUtil.DateTimeToUnixTimestamp(kvp.Value.Info.LastWriteTimeUtc) ||
             string.IsNullOrEmpty(kvp.Value.Hash)
         ).Select(kvp => kvp.Key).ToList();
 
         var hashTasks = new List<Task>();
         var hashSemaphore = new SemaphoreSlim(maxDegreeOfParallelism);
         var hashesComputed = 0;
-        
+
         foreach (var filePath in filesToHash)
         {
             await hashSemaphore.WaitAsync(ct);
-            
+
             hashTasks.Add(Task.Run(async () =>
             {
                 try
                 {
                     var (info, _, _, backupMtime, backupMtimeAttr) = files[filePath];
                     Log.Debug("Berechne Hash für Datei {FilePath} (letzte Änderung: {LastWriteTime})", filePath, info.LastWriteTimeUtc);
-                    
+
                     var fileHash = await CalculateMd5Async(filePath, ct);
                     if (persistComputedHashes)
                     {
@@ -84,12 +86,12 @@ public class FileHashService
                             "user.md5_hash_mtime",
                             FileAttributesUtil.DateTimeToUnixTimestamp(info.LastWriteTimeUtc));
                     }
-                    
+
                     // Aktualisiere den Hash in unserer Dictionary
-                    files[filePath] = (info, fileHash, 
-                        FileAttributesUtil.DateTimeToUnixTimestamp(info.LastWriteTimeUtc), 
+                    files[filePath] = (info, fileHash,
+                        FileAttributesUtil.DateTimeToUnixTimestamp(info.LastWriteTimeUtc),
                         backupMtime, backupMtimeAttr);
-                    
+
                     Interlocked.Increment(ref hashesComputed);
                     if (hashesComputed % 100 == 0)
                     {

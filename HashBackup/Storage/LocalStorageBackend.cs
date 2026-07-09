@@ -3,7 +3,7 @@ namespace HashBackup.Storage;
 /// <summary>
 /// Speichert Content-adressierte Dateien in einem lokalen Zielverzeichnis.
 /// </summary>
-public sealed class LocalStorageBackend : IStorageBackend
+public sealed class LocalStorageBackend : IStorageBackend, IReadableStorageBackend
 {
     private readonly string _destinationRoot;
 
@@ -173,6 +173,151 @@ public sealed class LocalStorageBackend : IStorageBackend
                 }
             }
         }
+    }
+
+    public Task<string?> FindLatestMetadataAsync(string jobName, CancellationToken ct = default)
+    {
+        var metadataDirectory = ResolveDestinationPath($"metadata/{jobName}");
+        if (!Directory.Exists(metadataDirectory))
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
+        var latest = Directory
+            .EnumerateFiles(metadataDirectory, "*.csv", options)
+            .Select(file => Path.GetRelativePath(_destinationRoot, file).Replace(Path.DirectorySeparatorChar, '/'))
+            .OrderByDescending(path => path, StringComparer.Ordinal)
+            .FirstOrDefault();
+        return Task.FromResult(latest);
+    }
+
+    public async Task<StorageObjectInfo> InspectObjectAsync(
+        string objectPath,
+        CancellationToken ct = default)
+    {
+        var localPath = ResolveDestinationPath(objectPath);
+        if (!File.Exists(localPath))
+        {
+            return StorageObjectInfo.Missing(objectPath);
+        }
+
+        var fileInfo = new FileInfo(localPath);
+        var hash = await CalculateMd5Async(localPath, ct);
+        return new StorageObjectInfo(
+            objectPath,
+            StorageObjectAvailability.Online,
+            fileInfo.Length,
+            hash,
+            "Local",
+            ArchiveStatus: null);
+    }
+
+    public async Task<IReadOnlyDictionary<string, StorageObjectInfo>> IndexContentObjectsAsync(
+        IEnumerable<string> expectedHashes,
+        CancellationToken ct = default)
+    {
+        var expected = expectedHashes.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, StorageObjectInfo>(StringComparer.OrdinalIgnoreCase);
+        if (expected.Count == 0 || !Directory.Exists(_destinationRoot))
+        {
+            return result;
+        }
+
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
+
+        foreach (var file in Directory.EnumerateFiles(_destinationRoot, "*", options))
+        {
+            ct.ThrowIfCancellationRequested();
+            var hash = Path.GetFileNameWithoutExtension(file);
+            if (!expected.Contains(hash) || !ContentHashValidator.IsMd5Hash(hash))
+            {
+                continue;
+            }
+
+            try
+            {
+                var actualHash = await CalculateMd5Async(file, ct);
+                var relativePath = Path.GetRelativePath(_destinationRoot, file).Replace(Path.DirectorySeparatorChar, '/');
+                var candidate = new StorageObjectInfo(
+                    relativePath,
+                    StorageObjectAvailability.Online,
+                    new FileInfo(file).Length,
+                    actualHash,
+                    "Local",
+                    ArchiveStatus: null);
+
+                if (!result.TryGetValue(hash, out var existing) ||
+                    (!string.Equals(existing.ContentHash, hash, StringComparison.OrdinalIgnoreCase) &&
+                     string.Equals(candidate.ContentHash, hash, StringComparison.OrdinalIgnoreCase)))
+                {
+                    result[hash] = candidate;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Lokales Backup-Objekt konnte nicht indiziert werden: {FilePath}", file);
+            }
+        }
+
+        return result;
+    }
+
+    public async Task DownloadObjectAsync(
+        string objectPath,
+        string destinationPath,
+        CancellationToken ct = default)
+    {
+        var localPath = ResolveDestinationPath(objectPath);
+        await using var source = new FileStream(
+            localPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 1024 * 1024,
+            useAsync: true);
+        await using var destination = new FileStream(
+            destinationPath,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 1024 * 1024,
+            useAsync: true);
+        await source.CopyToAsync(destination, ct);
+        await destination.FlushAsync(ct);
+    }
+
+    public async Task RequestRehydrationAsync(
+        IReadOnlyCollection<StorageObjectInfo> objects,
+        OnlineAccessTier targetTier,
+        ArchiveRehydratePriority priority,
+        CancellationToken ct = default)
+    {
+        foreach (var inspection in objects)
+        {
+            if (inspection.Availability == StorageObjectAvailability.Missing)
+            {
+                throw new FileNotFoundException("Lokales Backup-Objekt nicht gefunden.", inspection.ObjectPath);
+            }
+        }
+
+        // Lokaler Speicher ist immer online; die Parameter existieren nur für den
+        // gemeinsamen Vertrag mit Azure Blob Storage.
+        await Task.CompletedTask;
     }
 
     private static async Task<UploadResult> VerifyExistingDestinationAsync(

@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  test:
+    name: Format, Build, Test und Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: .NET 10 installieren
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: "**/*.csproj"
+
+      - name: Abhängigkeiten wiederherstellen
+        run: dotnet restore HashBackup.sln
+
+      - name: Formatierung prüfen
+        run: dotnet format HashBackup.sln --verify-no-changes --no-restore
+
+      - name: Release-Build
+        run: dotnet build HashBackup.sln --configuration Release --no-restore --warnaserror
+
+      - name: Tests
+        run: dotnet test HashBackup.Tests/HashBackup.Tests.csproj --configuration Release --no-build
+
+      - name: Abhängigkeiten auf bekannte Schwachstellen prüfen
+        run: dotnet package list --project HashBackup/HashBackup.csproj --vulnerable --include-transitive --no-restore
+
+  publish-linux:
+    name: Linux-x64-Artefakt
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: .NET 10 installieren
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: NativeAOT-Werkzeuge installieren
+        run: sudo apt-get update && sudo apt-get install --yes clang zlib1g-dev
+
+      - name: Linux-x64 veröffentlichen
+        run: >-
+          dotnet publish HashBackup/HashBackup.csproj
+          --configuration Release
+          --runtime linux-x64
+          --self-contained true
+          -p:PublishAot=true
+          -p:PublishSingleFile=true
+          --output artifacts/linux-x64
+
+      - name: Artefakt bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: HashBackup-linux-x64
+          path: artifacts/linux-x64/HashBackup
+          if-no-files-found: error
+          retention-days: 14

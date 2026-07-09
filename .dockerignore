@@ -3,12 +3,14 @@
 # being sent to Docker's build context or retained in a layer cache.
 .git
 .gitignore
+.github
 .idea
 **/bin
 **/obj
 builds
 HashBackup.Tests
 PythonTool
+*.md
 *.ini
 .env
 .env.*
