@@ -1,0 +1,17 @@
+# Only the production C# source is required by the Linux build image.
+# Excluding generated and configured files also prevents local credentials from
+# being sent to Docker's build context or retained in a layer cache.
+.git
+.gitignore
+.idea
+**/bin
+**/obj
+builds
+HashBackup.Tests
+PythonTool
+*.ini
+.env
+.env.*
+*.user
+*.DotSettings*
+.DS_Store

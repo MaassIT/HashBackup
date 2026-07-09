@@ -35,7 +35,7 @@ public class ConfigLoader
         // Je nach Dateierweiterung den passenden Provider verwenden
         if (configPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
         {
-            builder.AddJsonFile(Path.GetFileName(configPath), optional: false, reloadOnChange: true);
+            builder.AddJsonFile(Path.GetFileName(configPath), optional: false, reloadOnChange: false);
             Log.Debug("JSON-Konfigurationsprovider konfiguriert für {Path}", configPath);
             
             // Separate Konfiguration nur für die Datei
@@ -46,7 +46,7 @@ public class ConfigLoader
         }
         else if (configPath.EndsWith(".ini", StringComparison.OrdinalIgnoreCase))
         {
-            builder.AddIniFile(Path.GetFileName(configPath), optional: false, reloadOnChange: true);
+            builder.AddIniFile(Path.GetFileName(configPath), optional: false, reloadOnChange: false);
             Log.Debug("INI-Konfigurationsprovider konfiguriert für {Path}", configPath);
             
             // Separate Konfiguration nur für die Datei
@@ -155,7 +155,12 @@ public class ConfigLoader
             
         if (value != null)
         {
-            Log.Debug("Konfigurationswert gefunden: {Section}:{Key}={Value}", section, key, value);
+            // Sensitive keys are redacted before their value reaches Serilog. The Azure key
+            // is read before the backend can register it with the generic secret masker.
+            var loggedValue = IsSensitiveKey(key)
+                ? "***SECRET***"
+                : SensitiveDataManager.MaskSensitiveData(value);
+            Log.Debug("Konfigurationswert gefunden: {Section}:{Key}={Value}", section, key, loggedValue);
             return value;
         }
             
@@ -233,7 +238,10 @@ public class ConfigLoader
             "password",
             "token",
             "credential",
-            "apikey"
+            "apikey",
+            "connection",
+            "sas",
+            "signature"
         };
         
         return sensitiveKeyPatterns.Any(pattern => 

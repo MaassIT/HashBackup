@@ -18,13 +18,17 @@
 - 🚫 **Flexible Ignore-Patterns** für Dateien und Verzeichnisse (ähnlich .gitignore)
 - 📁 **Unterstützung mehrerer Quellverzeichnisse** für kombinierte Backups
 - 🔄 **Zuverlässige Wiederholungslogik** bei Netzwerkproblemen
+- 🧾 **Korrekte CSV-Metadaten** auch bei Kommas, Anführungszeichen und Zeilenumbrüchen in Dateinamen
+- 0️⃣ **Sicherung leerer Dateien**, damit Marker- und Platzhalterdateien nicht verloren gehen
+- 🛡️ **Integritätsprüfung bei veränderlichen Quellen** ohne falschen Sicherungszeitstempel
+- 🧪 **Dry-Run ohne Änderungen an Quell- oder Zieldaten** für sichere Produktionsprüfungen
 
 ## 🏗️ Installation
 
 1. **.NET 9 SDK installieren** ([Download](https://dotnet.microsoft.com/download))
 2. Repository klonen:
    ```bash
-   git clone https://github.com/deinuser/HashBackup.git
+   git clone https://github.com/MaassIT/HashBackup.git
    cd HashBackup
    ```
 3. Abhängigkeiten installieren:
@@ -35,6 +39,15 @@
    ```bash
    dotnet build
    ```
+
+Für die fertigen lokalen macOS- und Linux-x64-Binärdateien:
+
+```bash
+./build.sh
+```
+
+Die Artefakte landen anschließend unter `builds/HashBackup-macos` und
+`builds/HashBackup-linux`.
 
 ## 📜 Verwendung
 
@@ -68,8 +81,8 @@ RETRY_DELAY = 5
 
 [AZURE]
 STORAGE_ACCOUNT = meinaccount
-STORAGE_KEY = geheim
 CONTAINER = mein-container
+STORAGE_TIER = Archive
 ```
 
 ### Beispiel-Konfigurationsdatei (JSON)
@@ -78,7 +91,7 @@ CONTAINER = mein-container
 {
   "DEFAULT": {
     "BACKUP_TYPE": "azure",
-    "SOURCE_FOLDER": ["/daten", "/weitere-daten", "/noch-mehr-daten"],
+    "SOURCE_FOLDER": "/daten,/weitere-daten,/noch-mehr-daten",
     "BACKUP_METADATA_FILE": "/backup/metadata.csv",
     "SAFE_MODE": "true",
     "DRY_RUN": "false",
@@ -93,11 +106,39 @@ CONTAINER = mein-container
   },
   "AZURE": {
     "STORAGE_ACCOUNT": "meinaccount",
-    "STORAGE_KEY": "geheim",
-    "CONTAINER": "mein-container"
+    "CONTAINER": "mein-container",
+    "STORAGE_TIER": "Archive"
   }
 }
 ```
+
+### Secrets sicher übergeben
+
+Azure-Schlüssel sollten nicht in einer versionierten INI-/JSON-Datei stehen. HashBackup
+unterstützt weiterhin die bisherigen Konfigurationsdateien, bevorzugt für Secrets aber
+die bereits kompatible Umgebungsvariable:
+
+```bash
+export HASHBACKUP_AZURE__STORAGE_KEY='<Azure-Storage-Key>'
+HashBackup /pfad/zur/backup_config.ini
+```
+
+Die Umgebungsvariable überschreibt den Wert aus der Konfigurationsdatei. Sie darf nicht
+in Shell-History, Logs oder Repository-Dateien gespeichert werden.
+
+### Zuverlässigkeits- und Kompatibilitätshinweise
+
+- Bestehende CLI-Parameter und Konfigurationsschlüssel bleiben unterstützt.
+- `MAX_RETRIES` bleibt kompatibel und bezeichnet zusätzliche Wiederholungen nach dem
+  ersten Upload-Versuch.
+- Ändert sich eine Datei während oder direkt nach dem Upload, wird die neuere Version
+  nicht fälschlich als gesichert markiert. Der Lauf endet unvollständig und der nächste
+  Lauf bewertet die Datei erneut.
+- Ein fehlgeschlagener Metadaten-Upload lässt den gesamten Lauf mit einem Exitcode
+  ungleich null fehlschlagen, weil die Metadaten für eine Wiederherstellung erforderlich
+  sind.
+- `RETENTION_DAYS` wird vom Programm derzeit nicht aktiv umgesetzt. Aufbewahrung und
+  Löschung müssen als Azure-Lifecycle-Regel konfiguriert werden.
 
 ### Ignorierte Dateien und Verzeichnisse konfigurieren
 
@@ -164,7 +205,7 @@ HashBackup <config-file> [optionen]
 | `-m`, `--metadata` | Pfad zur Metadaten-Datei |
 | `-p`, `--parallel` | Anzahl paralleler Uploads |
 | `-sm`, `--safe-mode` | Safe-Mode aktivieren |
-| `-d`, `--dry-run` | Dry-Run ohne tatsächliche Änderungen |
+| `-d`, `--dry-run` | Dry-Run ohne Änderungen an Quell- oder Zieldaten |
 | `-i`, `--ignore` | Zu ignorierende Dateien/Verzeichnisse |
 | `-if`, `--ignore-file` | Pfad zu einer Datei mit Ignorier-Mustern |
 | `-ll`, `--log-level` | Log-Level (Verbose, Debug, Information, Warning, Error, Fatal) |

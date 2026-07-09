@@ -66,6 +66,7 @@ public class Application(string[] args)
         catch (Exception ex)
         {
             Log.Fatal(ex, "Ein schwerwiegender Fehler ist aufgetreten");
+            throw;
         }
     }
     
@@ -98,7 +99,7 @@ public class Application(string[] args)
         Console.WriteLine("  -m, --metadata <file>    Pfad zur Metadaten-Datei");
         Console.WriteLine("  -p, --parallel <num>     Anzahl paralleler Uploads");
         Console.WriteLine("  -sm, --safe-mode         Safe-Mode aktivieren");
-        Console.WriteLine("  -d, --dry-run            Dry-Run ohne tatsächliche Änderungen");
+        Console.WriteLine("  -d, --dry-run            Dry-Run ohne Quell- oder Zieldatenänderung");
         Console.WriteLine("  -r, --max-retries <num>  Max. Anzahl an Wiederholungen");
         Console.WriteLine("  -rd, --retry-delay <sec> Verzögerung zwischen Wiederholungen");
         Console.WriteLine("  -dd, --dir-depth <num>   Tiefe der Zielverzeichnisstruktur");
@@ -170,7 +171,11 @@ public class Application(string[] args)
         }
         
         // Unterstütze mehrere Quellordner
-        var sourceFolderString = config.Get("DEFAULT", "SOURCE_FOLDERS") ?? config.Get("DEFAULT", "SOURCE_FOLDER");
+        var sourceFolderString = config.Get("DEFAULT", "SOURCE_FOLDERS", string.Empty);
+        if (string.IsNullOrWhiteSpace(sourceFolderString))
+        {
+            sourceFolderString = config.Get("DEFAULT", "SOURCE_FOLDER");
+        }
         if (string.IsNullOrWhiteSpace(sourceFolderString))
         {
             Log.Error("Fehler: Weder SOURCE_FOLDERS noch SOURCE_FOLDER ist gesetzt");
@@ -199,13 +204,27 @@ public class Application(string[] args)
         }
         
         // Parse numerische Werte mit Standardwerten
-        var parallelUploads = int.TryParse(config.Get("DEFAULT", "PARALLEL_UPLOADS"), out var pu) ? pu : 1;
+        var parallelUploads = int.TryParse(config.Get("DEFAULT", "PARALLEL_UPLOADS", "1"), out var pu) ? pu : 1;
         var safeMode = config.Get("DEFAULT", "SAFE_MODE", "false")?.ToLower() == "true";
         var dryRun = config.Get("DEFAULT", "DRY_RUN", "false")?.ToLower() == "true";
-        var maxRetries = int.TryParse(config.Get("DEFAULT", "MAX_RETRIES"), out var mr) ? mr : 3;
-        var retryDelay = int.TryParse(config.Get("DEFAULT", "RETRY_DELAY"), out var rd) ? rd : 5;
+        var maxRetries = int.TryParse(config.Get("DEFAULT", "MAX_RETRIES", "3"), out var mr) ? mr : 3;
+        var retryDelay = int.TryParse(config.Get("DEFAULT", "RETRY_DELAY", "5"), out var rd) ? rd : 5;
         var jobName = config.Get("DEFAULT", "JOB_NAME", "Default")!;
-        var targetDirDepth = int.TryParse(config.Get("DEFAULT", "TARGET_DIR_DEPTH"), out var tdd) ? tdd : 3;
+        var targetDirDepth = int.TryParse(config.Get("DEFAULT", "TARGET_DIR_DEPTH", "3"), out var tdd) ? tdd : 3;
+
+        if (parallelUploads is < 1 or > 16 ||
+            maxRetries is < 1 or > 20 ||
+            retryDelay is < 0 or > 3600 ||
+            targetDirDepth is < 1 or > 8)
+        {
+            Log.Error(
+                "Ungültige numerische Backup-Konfiguration: PARALLEL_UPLOADS={ParallelUploads}, MAX_RETRIES={MaxRetries}, RETRY_DELAY={RetryDelay}, TARGET_DIR_DEPTH={TargetDirDepth}",
+                parallelUploads,
+                maxRetries,
+                retryDelay,
+                targetDirDepth);
+            return null;
+        }
         
         // Lade Ignorier-Muster (kommagetrennt)
         var ignorePatternString = config.Get("DEFAULT", "IGNORE", string.Empty);
@@ -217,7 +236,7 @@ public class Application(string[] args)
                 .ToList();
         
         // Pfad zur externen Datei mit Ignorier-Mustern
-        var ignoreFilePath = config.Get("DEFAULT", "IGNORE_FILE");
+        var ignoreFilePath = config.Get("DEFAULT", "IGNORE_FILE", string.Empty);
         
         // Wenn eine externe Ignorier-Datei angegeben wurde und existiert, lade die Muster
         if (!string.IsNullOrWhiteSpace(ignoreFilePath) && File.Exists(ignoreFilePath))

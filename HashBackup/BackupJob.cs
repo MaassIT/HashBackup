@@ -57,7 +57,7 @@ public class BackupJob
         // Starte das Abrufen der Hashes vom Backend asynchron, damit es parallel zur weiteren Verarbeitung läuft
         var hashesTask = _config.SafeMode ? _backend.FetchHashesAsync(ct) : Task.FromResult(new Dictionary<string, long>());
         
-        var uploadQueue = new ConcurrentQueue<(string filePath, string destPath, string fileHash, int tryCount)>();
+        var uploadQueue = new ConcurrentQueue<UploadWorkItem>();
         var filesIndiziert = 0;
         var filesToUpload = 0;
         var hashesToUpload = new HashSet<string>();
@@ -78,7 +78,7 @@ public class BackupJob
                 }
                 
                 // Sammle alle Dateien rekursiv, filtere aber nach den Ignorier-Mustern
-                var files = CollectFilesWithIgnorePatterns(sourceDir);
+                var files = CollectFilesWithIgnorePatterns(sourceDir, isSourceRoot: true);
                 allFiles.AddRange(files);
                 
                 Log.Information("Dateien aus {SourceFolder} hinzugefügt: {Count} Dateien", sourceFolder, files.Count);
@@ -131,7 +131,11 @@ public class BackupJob
         Log.Information("Starte parallele Hash-Berechnung für {Count} Dateien mit {ThreadCount} Threads", 
             allFiles.Count, _parallelHashCalculations);
             
-        await _fileHashService.CalculateHashesInParallelAsync(fileInfos, _parallelHashCalculations, ct);
+        await _fileHashService.CalculateHashesInParallelAsync(
+            fileInfos,
+            _parallelHashCalculations,
+            ct,
+            persistComputedHashes: !_config.DryRun);
         
         // Warte auf das Abrufen der Hashes vom Backend, falls es noch nicht abgeschlossen ist
         var hashes = await hashesTask;
@@ -145,12 +149,21 @@ public class BackupJob
         {
             filesIndiziert++;
             
-            var (fileInfo, fileHash, _, backupMtime, backupMtimeAttr) = fileInfos[filePath];
+            var (fileInfo, fileHash, fileHashMtime, backupMtime, backupMtimeAttr) = fileInfos[filePath];
             
             // Sicherstellen, dass ein Hash vorhanden ist
             if (string.IsNullOrEmpty(fileHash))
             {
                 Log.Warning("Kein Hash verfügbar für Datei {FilePath}, überspringe", filePath);
+                continue;
+            }
+
+            if (!fileHash.StartsWith("SYM-", StringComparison.Ordinal) &&
+                !ContentHashValidator.IsMd5Hash(fileHash))
+            {
+                // XAttrs sind beschreibbar. A malformed cached value must never become part
+                // of a content-addressed destination path.
+                Log.Warning("Ungültiger gespeicherter Hash für Datei {FilePath}, überspringe", filePath);
                 continue;
             }
             
@@ -173,7 +186,10 @@ public class BackupJob
                     {
                         Log.Debug("Korrigiere Sicherungsstatus für {FilePath}, da sich die Zeit geändert hat", filePath);
                         // Aktualisiere den Backup-mtime mit der aktuellen Datei-mtime
-                        FileAttributesUtil.SetAttribute(filePath, backupMtimeAttr, lastWriteTimeUnixTimestamp);
+                        if (!_config.DryRun)
+                        {
+                            FileAttributesUtil.SetAttribute(filePath, backupMtimeAttr, lastWriteTimeUnixTimestamp);
+                        }
                     }
                 }
             }
@@ -189,26 +205,34 @@ public class BackupJob
             // Für Metadaten-CSV speichern
             filesForMetadata[filePath] = (fileInfo, fileHash, uploadRequired);
 
-            if (fileHash.StartsWith("SYM-"))
+            if (fileHash.StartsWith("SYM-", StringComparison.Ordinal))
                 uploadRequired = false;
             
-            if (uploadRequired && fileInfo.Length > 0 && !hashesToUpload.Contains(fileHash))
+            if (uploadRequired && !hashesToUpload.Contains(fileHash))
             {
                 // Zielpfad wie im Python-Tool: z.B. a/b/c/hash.ext für targetDirDepth=3
                 var dirParts = new List<string>();
                 for (var i = 0; i < Math.Min(_config.TargetDirDepth, fileHash.Length); i++)
                     dirParts.Add(fileHash[i].ToString());
                 var destFilePath = $"{string.Join("/", dirParts)}/{fileHash}{fileInfo.Extension}";
-                uploadQueue.Enqueue((filePath, destFilePath, fileHash, 0));
+                uploadQueue.Enqueue(new UploadWorkItem(
+                    filePath,
+                    destFilePath,
+                    fileHash,
+                    fileHashMtime ?? lastWriteTimeUnixTimestamp,
+                    fileInfo.Length));
                 hashesToUpload.Add(fileHash);
                 filesToUpload++;
                 Log.Debug("Datei für Upload eingeplant: {FilePath}", filePath);
             }
-            else if (fileHash.StartsWith("SYM-"))
+            else if (fileHash.StartsWith("SYM-", StringComparison.Ordinal))
             {
                 Log.Debug("Symbolischer Link erkannt und nur in Metadaten erfasst (kein Upload): {FilePath}", filePath);
                 // Wir markieren den Link als gesichert, indem wir den Backup-Mtime aktualisieren
-                FileAttributesUtil.SetAttribute(filePath, backupMtimeAttr, fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString());
+                if (!_config.DryRun)
+                {
+                    FileAttributesUtil.SetAttribute(filePath, backupMtimeAttr, fileInfo.LastWriteTimeUtc.ToFileTimeUtc().ToString());
+                }
             }
         }
 
@@ -220,15 +244,16 @@ public class BackupJob
         // Cache leeren, um Speicher freizugeben
         FileAttributesUtil.ClearCache();
 
-        var tasks = new Task[2];
-        
-        // Führe die Uploads mit dem UploadCoordinator durch
-        tasks[0] = _uploadCoordinator.UploadFilesAsync(uploadQueue, ct);
-        
-        // Hochladen der Metadaten-Datei in den Storage
-        tasks[1] = _metadataManager.UploadBackupMetadataAsync(_backend, _fileHashService, ct);
+        // Die Daten-Uploads zuerst abschließen. Die nachfolgende Metadaten-Datei dokumentiert
+        // damit eindeutig, welche Dateien für diesen Lauf eingeplant waren.
+        await _uploadCoordinator.UploadFilesAsync(uploadQueue, ct);
+        var metadataUploaded = await _metadataManager.UploadBackupMetadataAsync(_backend, _fileHashService, ct);
 
-        Task.WaitAll(tasks, ct);
+        if (_uploadCoordinator.GetFailedFileCount() > 0 || !metadataUploaded)
+        {
+            throw new InvalidOperationException(
+                $"Backup unvollständig: {_uploadCoordinator.GetFailedFileCount()} Datendateien fehlgeschlagen, Metadaten-Upload erfolgreich: {metadataUploaded}.");
+        }
     }
     
     /// <summary>
@@ -236,12 +261,20 @@ public class BackupJob
     /// </summary>
     /// <param name="directory">Das zu durchsuchende Verzeichnis</param>
     /// <returns>Liste der Dateipfade, die nicht ignoriert werden sollen</returns>
-    private List<string> CollectFilesWithIgnorePatterns(DirectoryInfo directory)
+    private List<string> CollectFilesWithIgnorePatterns(DirectoryInfo directory, bool isSourceRoot = false)
     {
         var result = new List<string>();
         
         try 
         {
+            // Directory symlinks can escape the configured source tree or create cycles.
+            // An explicitly configured source root remains valid; nested links are skipped.
+            if (!isSourceRoot && directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                Log.Warning("Symbolisches Verzeichnis wird nicht rekursiv verfolgt: {Directory}", directory.FullName);
+                return result;
+            }
+
             // Überspringe ignorierte Verzeichnisse
             if (_ignoreMatcher.ShouldIgnore(directory.Name) || 
                 _ignoreMatcher.ShouldIgnore(directory.FullName, true))

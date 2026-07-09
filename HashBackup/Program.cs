@@ -12,13 +12,12 @@ try
     var app = new Application(args);
     await app.RunAsync();
 }
-catch (Exception ex)
+catch
 {
-    Log.Fatal(ex, "Ein schwerwiegender Fehler ist aufgetreten");
+    // Application.RunAsync already writes the exception once with full context.
+    Environment.ExitCode = 1;
 }
 finally
 {
     Log.CloseAndFlush();
 }
-
-

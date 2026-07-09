@@ -1,9 +1,9 @@
 namespace HashBackup.Services;
 
 /// <summary>
-/// Koordiniert den Upload von Dateien zum Storage-Backend
+/// Koordiniert parallele, begrenzte Uploads und die Retry-Behandlung eines Backup-Laufs.
 /// </summary>
-public class UploadCoordinator(
+public sealed class UploadCoordinator(
     IStorageBackend backend,
     int parallelUploads,
     int maxRetries,
@@ -11,192 +11,237 @@ public class UploadCoordinator(
     bool dryRun,
     string jobName)
 {
-    // Zähler für die Upload-Statistik
+    private const int ReportInterval = 10;
     private int _savedFiles;
     private long _savedSize;
-    
-    // Gesamtstatistik für den Fortschritt
+    private int _failedFiles;
     private int _totalFiles;
     private long _totalSize;
     private DateTime _startTime;
-    private const int ReportInterval = 10; // Meldung alle 10 Dateien
 
-    /// <summary>
-    /// Führt den Upload von Dateien zum Backend durch
-    /// </summary>
     public async Task UploadFilesAsync(
-        ConcurrentQueue<(string filePath, string destPath, string fileHash, int tryCount)> uploadQueue,
+        ConcurrentQueue<UploadWorkItem> uploadQueue,
         CancellationToken ct = default)
     {
         if (dryRun)
         {
-            // Im Dry-Run nur die Dateien anzeigen, die hochgeladen würden
             while (uploadQueue.TryDequeue(out var item))
             {
-                Log.Information("[DRY RUN] Würde Datei {FilePath} hochladen nach {DestPath}", item.filePath, item.destPath);
+                Log.Information("[DRY RUN] Würde Datei {FilePath} hochladen nach {DestPath}", item.FilePath, item.DestinationPath);
             }
+
             return;
         }
-        
-        // Initialisiere Statistik
+
         _savedFiles = 0;
         _savedSize = 0;
+        _failedFiles = 0;
         _startTime = DateTime.Now;
-        
-        // Berechne Gesamtstatistik für Fortschrittsanzeige
         CalculateTotalStatistics(uploadQueue);
-        
-        Log.Information("Starte Upload von {TotalFiles} Dateien mit insgesamt {TotalSizeMB:F2} MB", 
-            _totalFiles, (float)_totalSize / 1024 / 1024.0);
-        
-        // Parallele Uploads
-        var tasks = new List<Task>();
-        var cts = new CancellationTokenSource();
-        var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cts.Token);
-        
-        for (var i = 0; i < parallelUploads; i++)
-        {
-            tasks.Add(Task.Run(async () =>
-            {
-                while (linkedCts is { Token.IsCancellationRequested: false } && uploadQueue.TryDequeue(out var item))
-                {
-                    try
-                    {
-                        var success = await backend.UploadToDestinationAsync(item.filePath, item.destPath, item.fileHash, false, linkedCts.Token);
-                        if (success)
-                        {
-                            // Bei Erfolg den Backup-Zeitstempel aktualisieren
-                            FileAttributesUtil.SetAttribute(
-                                item.filePath, 
-                                $"user.{jobName}_backup_mtime", 
-                                FileAttributesUtil.DateTimeToUnixTimestamp(new FileInfo(item.filePath).LastWriteTimeUtc));
-                            
-                            var fileSize = new FileInfo(item.filePath).Length;
-                            
-                            // Statistik aktualisieren
-                            Interlocked.Increment(ref _savedFiles);
-                            Interlocked.Add(ref _savedSize, fileSize);
-                            
-                            // Fortschrittsanzeige aktualisieren
-                            if (_savedFiles % ReportInterval == 0 || _savedFiles == _totalFiles)
-                            {
-                                ReportProgress();
-                            }
-                        }
-                        else if (item.tryCount < maxRetries)
-                        {
-                            // Bei Misserfolg eine Wiederholung einreihen
-                            await Task.Delay(retryDelay * 1000, linkedCts.Token);
-                            uploadQueue.Enqueue((item.filePath, item.destPath, item.fileHash, item.tryCount + 1));
-                            Log.Warning("Upload fehlgeschlagen für {FilePath}, Versuch {TryCount}/{MaxRetries}", 
-                                item.filePath, item.tryCount + 1, maxRetries);
-                        }
-                        else
-                        {
-                            Log.Error("Datei {FilePath} konnte nicht hochgeladen werden. Maximale Anzahl an Versuchen erreicht", item.filePath);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error(ex, "Fehler beim Upload von {FilePath}", item.filePath);
-                    }
-                }
-            }, linkedCts.Token));
-        }
-        
+
+        Log.Information(
+            "Starte Upload von {TotalFiles} Dateien mit insgesamt {TotalSizeMB:F2} MB",
+            _totalFiles,
+            _totalSize / 1024.0 / 1024.0);
+
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var workers = Enumerable.Range(0, parallelUploads)
+            .Select(_ => Task.Run(
+                () => UploadWorkerAsync(uploadQueue, linkedCts.Token),
+                linkedCts.Token))
+            .ToArray();
+
         try
         {
-            await Task.WhenAll(tasks);
+            await Task.WhenAll(workers);
         }
         catch (OperationCanceledException)
         {
             Log.Warning("Upload-Prozess wurde abgebrochen");
         }
-        
-        // Abschließende Statusmeldung
+
         var duration = DateTime.Now - _startTime;
-        var uploadSpeedMBps = _savedSize > 0 ? (_savedSize / 1024.0 / 1024.0) / duration.TotalSeconds : 0;
-        
-        Log.Information("Backup abgeschlossen: {SavedFiles} von {TotalFiles} Dateien gesichert mit {SavedSizeMB:F2} MB in {Duration:hh\\:mm\\:ss} (durchschnittlich {SpeedMBps:F2} MB/s)", 
-            _savedFiles, 
+        var uploadSpeedMbPerSecond = _savedSize > 0 && duration.TotalSeconds > 0
+            ? _savedSize / 1024.0 / 1024.0 / duration.TotalSeconds
+            : 0;
+
+        Log.Information(
+            "Backup abgeschlossen: {SavedFiles} von {TotalFiles} Dateien gesichert mit {SavedSizeMB:F2} MB in {Duration} (durchschnittlich {SpeedMBps:F2} MB/s)",
+            _savedFiles,
             _totalFiles,
-            (float)_savedSize / 1024 / 1024.0,
+            _savedSize / 1024.0 / 1024.0,
             duration,
-            uploadSpeedMBps);
-    }
-    
-    /// <summary>
-    /// Berechnet die Gesamtstatistik für die Fortschrittsanzeige
-    /// </summary>
-    private void CalculateTotalStatistics(ConcurrentQueue<(string filePath, string destPath, string fileHash, int tryCount)> queue)
-    {
-        _totalFiles = queue.Count;
-        _totalSize = 0;
-        
-        // Berechne die Gesamtgröße aller Dateien
-        foreach (var (filePath, _, _, _) in queue)
+            uploadSpeedMbPerSecond);
+
+        if (_failedFiles > 0)
         {
+            Log.Error("{FailedFiles} Dateien konnten in diesem Lauf nicht gesichert werden.", _failedFiles);
+        }
+    }
+
+    public (int SavedFiles, int TotalFiles, long SavedSize, long TotalSize) GetUploadStatistics() =>
+        (_savedFiles, _totalFiles, _savedSize, _totalSize);
+
+    public int GetFailedFileCount() => _failedFiles;
+
+    private async Task UploadWorkerAsync(
+        ConcurrentQueue<UploadWorkItem> uploadQueue,
+        CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && uploadQueue.TryDequeue(out var item))
+        {
+            UploadResult result;
+
             try
             {
-                var fileInfo = new FileInfo(filePath);
-                _totalSize += fileInfo.Length;
+                result = await backend.UploadToDestinationAsync(
+                    item.FilePath,
+                    item.DestinationPath,
+                    item.FileHash,
+                    isImportant: false,
+                    ct);
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Fehler beim Zugriff auf {FilePath} für die Gesamtstatistik", filePath);
+                Log.Error(ex, "Unerwarteter Fehler beim Upload von {FilePath}", item.FilePath);
+                result = UploadResult.Failed;
+            }
+
+            if (result.Success)
+            {
+                RegisterSuccessfulUpload(item);
+                continue;
+            }
+
+            if (result.SourceWasModified)
+            {
+                // The storage backend has verified that the source no longer matches the
+                // content-addressed blob name. Retrying the stale hash would be incorrect.
+                Interlocked.Increment(ref _failedFiles);
+                Log.Warning(
+                    "Upload von {FilePath} wird nicht mit dem veralteten Hash wiederholt; die Datei wird im nächsten vollständigen Backup-Lauf neu bewertet.",
+                    item.FilePath);
+                continue;
+            }
+
+            await RequeueOrFailAsync(item, uploadQueue, ct);
+        }
+    }
+
+    private void RegisterSuccessfulUpload(UploadWorkItem item)
+    {
+        var fileInfo = new FileInfo(item.FilePath);
+        fileInfo.Refresh();
+        var currentMtime = FileAttributesUtil.DateTimeToUnixTimestamp(fileInfo.LastWriteTimeUtc);
+
+        if (fileInfo.Length != item.ExpectedLength ||
+            !string.Equals(currentMtime, item.HashMtime, StringComparison.Ordinal))
+        {
+            // The uploaded bytes were valid for the selected hash, but the source already
+            // represents a newer version. Do not mark that newer version as backed up.
+            Interlocked.Increment(ref _failedFiles);
+            Log.Warning(
+                "Quelle wurde direkt nach dem Upload geändert und bleibt für den nächsten Lauf offen: {FilePath}",
+                item.FilePath);
+            return;
+        }
+
+        FileAttributesUtil.SetAttribute(
+            item.FilePath,
+            $"user.{jobName}_backup_mtime",
+            item.HashMtime);
+
+        var savedFiles = Interlocked.Increment(ref _savedFiles);
+        Interlocked.Add(ref _savedSize, item.ExpectedLength);
+
+        if (savedFiles % ReportInterval == 0 || savedFiles == _totalFiles)
+        {
+            ReportProgress();
+        }
+    }
+
+    private async Task RequeueOrFailAsync(
+        UploadWorkItem item,
+        ConcurrentQueue<UploadWorkItem> uploadQueue,
+        CancellationToken ct)
+    {
+        var currentAttempt = item.TryCount + 1;
+        var maxAttempts = maxRetries + 1;
+        if (item.TryCount >= maxRetries)
+        {
+            Interlocked.Increment(ref _failedFiles);
+            Log.Error(
+                "Datei {FilePath} konnte nach {AttemptCount} Versuchen nicht hochgeladen werden.",
+                item.FilePath,
+                currentAttempt);
+            return;
+        }
+
+        var nextAttempt = currentAttempt + 1;
+        Log.Warning(
+                "Upload fehlgeschlagen für {FilePath}, Versuch {CurrentAttempt}/{MaxAttempts}; Wiederholung {NextAttempt}/{MaxAttempts} wird eingeplant.",
+            item.FilePath,
+            currentAttempt,
+            maxAttempts,
+            nextAttempt);
+
+        if (retryDelay > 0)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(retryDelay), ct);
+        }
+
+        uploadQueue.Enqueue(item with { TryCount = currentAttempt });
+    }
+
+    private void CalculateTotalStatistics(
+        ConcurrentQueue<UploadWorkItem> queue)
+    {
+        _totalFiles = queue.Count;
+        _totalSize = 0;
+
+        foreach (var item in queue)
+        {
+            try
+            {
+                _totalSize += item.ExpectedLength;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Fehler beim Zugriff auf {FilePath} für die Gesamtstatistik", item.FilePath);
             }
         }
     }
-    
-    /// <summary>
-    /// Gibt einen detaillierten Fortschrittsbericht aus
-    /// </summary>
+
     private void ReportProgress()
     {
-        // Prozentsatz des Fortschritts
         var percentFiles = _totalFiles > 0 ? (float)_savedFiles / _totalFiles * 100 : 0;
         var percentSize = _totalSize > 0 ? (float)_savedSize / _totalSize * 100 : 0;
-        
-        // Berechne verbleibende Anzahl und Größe
         var remainingFiles = _totalFiles - _savedFiles;
         var remainingSize = _totalSize - _savedSize;
-        
-        // Berechne geschätzte verbleibende Zeit
         var elapsedTime = DateTime.Now - _startTime;
+        var uploadSpeedMbPerSecond = elapsedTime.TotalSeconds > 0
+            ? _savedSize / 1024.0 / 1024.0 / elapsedTime.TotalSeconds
+            : 0;
         var remainingTime = TimeSpan.Zero;
-        
+
         if (_savedSize > 0 && _totalSize > 0)
         {
             var completionFraction = (double)_savedSize / _totalSize;
-            if (completionFraction > 0)
-            {
-                var estimatedTotalTime = TimeSpan.FromSeconds(elapsedTime.TotalSeconds / completionFraction);
-                remainingTime = estimatedTotalTime - elapsedTime;
-            }
+            var estimatedTotalTime = TimeSpan.FromSeconds(elapsedTime.TotalSeconds / completionFraction);
+            remainingTime = estimatedTotalTime - elapsedTime;
         }
-        
-        // Berechne aktuelle Upload-Geschwindigkeit
-        var uploadSpeedMBps = elapsedTime.TotalSeconds > 0 ? (_savedSize / 1024.0 / 1024.0) / elapsedTime.TotalSeconds : 0;
-        
+
         Log.Information(
-            "Upload-Fortschritt: {SavedFiles}/{TotalFiles} Dateien ({PercentFiles:F1}%) - {SavedSizeMB:F2}/{TotalSizeMB:F2} MB ({PercentSize:F1}%) - Noch {RemainingFiles} Dateien ({RemainingMB:F2} MB) - {SpeedMBps:F2} MB/s - Verbleibend: {RemainingTime:hh\\:mm\\:ss}", 
-            _savedFiles, 
-            _totalFiles, 
+            "Upload-Fortschritt: {SavedFiles}/{TotalFiles} Dateien ({PercentFiles:F1}%) - {SavedSizeMB:F2}/{TotalSizeMB:F2} MB ({PercentSize:F1}%) - Noch {RemainingFiles} Dateien ({RemainingMB:F2} MB) - {SpeedMBps:F2} MB/s - Verbleibend: {RemainingTime}",
+            _savedFiles,
+            _totalFiles,
             percentFiles,
-            (float)_savedSize / 1024 / 1024.0,
-            (float)_totalSize / 1024 / 1024.0,
+            _savedSize / 1024.0 / 1024.0,
+            _totalSize / 1024.0 / 1024.0,
             percentSize,
             remainingFiles,
-            (float)remainingSize / 1024 / 1024.0,
-            uploadSpeedMBps,
+            remainingSize / 1024.0 / 1024.0,
+            uploadSpeedMbPerSecond,
             remainingTime);
-    }
-    
-    /// <summary>
-    /// Liefert die Upload-Statistik
-    /// </summary>
-    public (int SavedFiles, int TotalFiles, long SavedSize, long TotalSize) GetUploadStatistics()
-    {
-        return (_savedFiles, _totalFiles, _savedSize, _totalSize);
     }
 }

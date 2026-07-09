@@ -50,7 +50,8 @@ public class FileHashService
     public async Task CalculateHashesInParallelAsync(
         ConcurrentDictionary<string, (FileInfo Info, string? Hash, string? HashMtime, string? BackupMtime, string BackupMtimeAttr)> files,
         int maxDegreeOfParallelism,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool persistComputedHashes = true)
     {
         var filesToHash = files.Where(kvp => 
             string.IsNullOrEmpty(kvp.Value.HashMtime) || 
@@ -74,10 +75,15 @@ public class FileHashService
                     Log.Debug("Berechne Hash für Datei {FilePath} (letzte Änderung: {LastWriteTime})", filePath, info.LastWriteTimeUtc);
                     
                     var fileHash = await CalculateMd5Async(filePath, ct);
-                    FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_value", fileHash);
-                    // Unix-Timestamp im Python-Format speichern anstatt FileTime
-                    FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_mtime", 
-                        FileAttributesUtil.DateTimeToUnixTimestamp(info.LastWriteTimeUtc));
+                    if (persistComputedHashes)
+                    {
+                        FileAttributesUtil.SetAttribute(filePath, "user.md5_hash_value", fileHash);
+                        // Unix-Timestamp im Python-Format speichern anstatt FileTime
+                        FileAttributesUtil.SetAttribute(
+                            filePath,
+                            "user.md5_hash_mtime",
+                            FileAttributesUtil.DateTimeToUnixTimestamp(info.LastWriteTimeUtc));
+                    }
                     
                     // Aktualisiere den Hash in unserer Dictionary
                     files[filePath] = (info, fileHash, 

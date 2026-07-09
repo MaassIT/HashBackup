@@ -13,22 +13,33 @@ public static class FileAttributesUtil
     // xattr für macOS/Linux, ADS für Windows
     public static void SetAttribute(string filePath, string attrName, string value)
     {
-        // Aktualisiere den Cache
         var cacheKey = $"{filePath}:{attrName}";
-        AttributeCache[cacheKey] = value;
         
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             // NTFS ADS: z.B. file.txt:attrName
             var adsPath = filePath + ":" + attrName;
             File.WriteAllText(adsPath, value);
+            AttributeCache[cacheKey] = value;
         }
         else
         {
             try
             {
                 var bytes = System.Text.Encoding.UTF8.GetBytes(value);
-                setxattr(filePath, attrName, bytes, bytes.Length, 0, 0);
+                if (setxattr(filePath, attrName, bytes, bytes.Length, 0, 0) != 0)
+                {
+                    Log.Warning(
+                        "Fehler beim Setzen des Attributs {AttrName} für {FilePath}: errno={ErrorCode}",
+                        attrName,
+                        filePath,
+                        Marshal.GetLastPInvokeError());
+                    return;
+                }
+
+                // Cache only values that were persisted successfully. Otherwise a failed
+                // xattr write could look successful for the remainder of the current run.
+                AttributeCache[cacheKey] = value;
             }
             catch (Exception ex)
             {
@@ -81,10 +92,15 @@ public static class FileAttributesUtil
         {
             // Verwende den nativen getxattr Aufruf anstelle eines Prozess-Starts
 #if !WINDOWS
-            // Bestimme zunächst die Größe des Attributs
-            
-            // Lese das Attribut
-            var buffer = new byte[100];
+            // Determine the required size first. HashBackup stores short hashes as well as
+            // potentially long Base64-encoded symlink targets, so a fixed buffer is unsafe.
+            var requiredSize = getxattr(filePath, attrName, null, 0);
+            if (requiredSize <= 0 || requiredSize > int.MaxValue)
+            {
+                return null;
+            }
+
+            var buffer = new byte[(int)requiredSize];
             var readSize = getxattr(filePath, attrName, buffer, (ulong)buffer.Length);
             if (readSize <= 0) return null;
             
