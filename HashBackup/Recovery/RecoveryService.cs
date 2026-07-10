@@ -764,7 +764,7 @@ public sealed class RecoveryService(
         int localSourceVerifiedFiles = 0)
     {
         Log.Information(
-            "{Operation} abgeschlossen: Status={Status}, lokale Quelle gegen Katalog geprüft={LocalSourceVerifiedFiles}, Archive-Inhalt vollständig geprüft={VerifiedFiles}, nur strukturell geprüft={StructurallyVerifiedFiles}, wiederhergestellt={RestoredFiles}, Rehydration ausstehend={PendingFiles}, fehlgeschlagen={FailedFiles}",
+            "{Operation} abgeschlossen: Status={Status}, Archive-Inhalt vollständig geprüft={VerifiedFiles}, lokale Quelle gegen Katalog geprüft={LocalSourceVerifiedFiles}, nur strukturell geprüft={StructurallyVerifiedFiles}, wiederhergestellt={RestoredFiles}, Rehydration ausstehend={PendingFiles}, fehlgeschlagen={FailedFiles}",
             operation,
             status,
             verifiedFiles,
