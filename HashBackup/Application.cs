@@ -99,7 +99,10 @@ public class Application(string[] args)
             commandLine.RehydrateTier,
             commandLine.RehydratePriority,
             commandLine.Overwrite,
-            commandLine.DryRun || config.DryRun);
+            commandLine.DryRun || config.DryRun,
+            commandLine.VerifySource,
+            commandLine.OnlyMissingContentMd5,
+            commandLine.ReportPath);
         var recoveryService = new RecoveryService(
             readableBackend,
             config.TargetDirDepth,
@@ -171,6 +174,9 @@ public class Application(string[] args)
         Console.WriteLine("  --rehydrate-tier <tier>  Ziel-Tier: hot, cool (Standard) oder cold");
         Console.WriteLine("  --rehydrate-priority <p> standard (Standard) oder high");
         Console.WriteLine("  --overwrite              Abweichende vorhandene Restore-Dateien ersetzen");
+        Console.WriteLine("  --verify-source          Fehlendes Storage-MD5 gegen lokale Quelldatei prüfen");
+        Console.WriteLine("  --only-missing-content-md5 Nur Legacy-Objekte ohne Storage-MD5 prüfen");
+        Console.WriteLine("  --report <csv>           Detaillierten Verify-Bericht atomar schreiben");
         Console.WriteLine();
         Console.WriteLine("Umgebungsvariablen:");
         Console.WriteLine("  HASHBACKUP_DEFAULT__*    Konfigurationsvariablen mit HASHBACKUP_-Prefix");

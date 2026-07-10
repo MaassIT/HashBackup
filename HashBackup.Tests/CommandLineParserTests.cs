@@ -47,4 +47,41 @@ public sealed class CommandLineParserTests
         Assert.True(request.Overwrite);
         Assert.Empty(request.ConfigArguments);
     }
+
+    /// <summary>
+    /// Die lokale Quellprüfung und der Bericht sind additive Verify-Optionen und
+    /// dürfen nicht als Konfigurationsüberschreibungen weitergereicht werden.
+    /// </summary>
+    [Fact]
+    public void Parse_ReadsSourceVerificationAndReportOptions()
+    {
+        var request = CommandLineParser.Parse(
+        [
+            "verify",
+            "config.ini",
+            "--verify-source",
+            "--only-missing-content-md5",
+            "--report",
+            "/tmp/legacy-report.csv"
+        ]);
+
+        Assert.True(request.VerifySource);
+        Assert.True(request.OnlyMissingContentMd5);
+        Assert.Equal("/tmp/legacy-report.csv", request.ReportPath);
+        Assert.Empty(request.ConfigArguments);
+    }
+
+    /// <summary>
+    /// Eine lokale Quellprüfung darf nicht versehentlich mit Archive-Download
+    /// oder Rehydration kombiniert werden, weil dies die Kostenfreiheit und die
+    /// Bedeutung des Nachweises unklar machen würde.
+    /// </summary>
+    [Fact]
+    public void Parse_RejectsSourceVerificationCombinedWithDeepVerification()
+    {
+        var exception = Assert.Throws<ArgumentException>(
+            () => CommandLineParser.Parse(["verify", "config.ini", "--verify-source", "--deep"]));
+
+        Assert.Contains("nicht mit --deep", exception.Message, StringComparison.Ordinal);
+    }
 }

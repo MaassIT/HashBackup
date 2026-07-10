@@ -25,7 +25,10 @@ public sealed record CommandLineRequest(
     OnlineAccessTier RehydrateTier = OnlineAccessTier.Cool,
     ArchiveRehydratePriority RehydratePriority = ArchiveRehydratePriority.Standard,
     bool Overwrite = false,
-    bool DryRun = false);
+    bool DryRun = false,
+    bool VerifySource = false,
+    bool OnlyMissingContentMd5 = false,
+    string? ReportPath = null);
 
 /// <summary>
 /// Parst additive Unterbefehle, ohne bestehende Aufrufe der Form
@@ -76,6 +79,9 @@ public static class CommandLineParser
         var rehydrate = false;
         var overwrite = false;
         var dryRun = false;
+        var verifySource = false;
+        var onlyMissingContentMd5 = false;
+        string? reportPath = null;
         var rehydrateTier = OnlineAccessTier.Cool;
         var rehydratePriority = ArchiveRehydratePriority.Standard;
         var configArguments = new List<string>();
@@ -106,6 +112,15 @@ public static class CommandLineParser
                 case "-d":
                     dryRun = true;
                     break;
+                case "--verify-source":
+                    verifySource = true;
+                    break;
+                case "--only-missing-content-md5":
+                    onlyMissingContentMd5 = true;
+                    break;
+                case "--report":
+                    reportPath = ReadValue(args, ref index, argument);
+                    break;
                 case "--rehydrate-tier":
                     rehydrateTier = ParseRehydrateTier(ReadValue(args, ref index, argument));
                     break;
@@ -123,6 +138,18 @@ public static class CommandLineParser
             throw new ArgumentException("Der Restore-Befehl benötigt --destination <Verzeichnis>.");
         }
 
+        if (command != HashBackupCommand.Verify &&
+            (verifySource || onlyMissingContentMd5 || reportPath != null))
+        {
+            throw new ArgumentException("--verify-source, --only-missing-content-md5 und --report sind nur für verify gültig.");
+        }
+
+        if (verifySource && (deepVerify || rehydrate))
+        {
+            throw new ArgumentException(
+                "--verify-source kann nicht mit --deep oder --rehydrate kombiniert werden; die lokale Prüfung greift nie auf Archive-Inhalte zu.");
+        }
+
         return new CommandLineRequest(
             command,
             configPath,
@@ -134,7 +161,10 @@ public static class CommandLineParser
             rehydrateTier,
             rehydratePriority,
             overwrite,
-            dryRun);
+            dryRun,
+            verifySource,
+            onlyMissingContentMd5,
+            reportPath);
     }
 
     private static string ReadValue(string[] args, ref int index, string option)

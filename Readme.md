@@ -168,6 +168,34 @@ erst `--deep` bestätigt den Inhalt dieser Objekte durch einen eigenen MD5-Lauf.
 Dadurch bleiben flache Prüfungen auch für Archive ohne kostenpflichtige Rehydration
 nutzbar, ohne einen kryptografischen Nachweis vorzutäuschen.
 
+Wenn die ursprünglichen Quelldateien noch vorhanden sind, kann HashBackup deren
+Inhalt stattdessen lokal neu hashen. Der folgende Befehl prüft ausschließlich
+Legacy-Objekte ohne Storage-Content-MD5, lädt keine Archive-Daten herunter und
+fordert keine Rehydration an:
+
+```bash
+HashBackup verify /pfad/zur/backup_config.ini \
+  --metadata latest \
+  --verify-source \
+  --only-missing-content-md5 \
+  --report /sicherer/pfad/hashbackup-source-verify.csv
+```
+
+Der atomar geschriebene CSV-Bericht enthält für jeden betroffenen Eintrag das
+Ergebnis. Auf Unix wird die Berichtsdatei mit Modus `0600` angelegt. Die lokale
+Prüfung validiert Dateigröße und einen neu berechneten MD5 gegen den Katalog-Hash
+und erfasst im selben Lesevorgang zusätzlich einen SHA-256 als stärkeren zukünftigen
+Nachweis. Sie schreibt weder xattrs noch Quelldateien und folgt keinen Symlinks
+unterhalb der konfigurierten Quellwurzel. `--verify-source` ist absichtlich nicht
+mit `--deep` oder `--rehydrate` kombinierbar.
+
+Dieser Nachweis bestätigt die lokale Quelle und zusammen mit Existenz und Größe die
+korrekte Zuordnung des content-adressierten Archive-Objekts. Die Nutzdaten im
+Archive selbst bleiben dabei ausdrücklich unbewiesen: Der Modus ersetzt keinen
+Byte-für-Byte-Download des Archive-Objekts. Ein fehlendes Storage-Content-MD5 wird
+daher nicht nachträglich nur aus dem Dateinamen gesetzt, weil dies einen nicht
+erbrachten serverseitigen Inhaltsnachweis vortäuschen würde.
+
 Eine vollständige Prüfung lädt jedes Objekt herunter und berechnet den MD5 erneut:
 
 ```bash

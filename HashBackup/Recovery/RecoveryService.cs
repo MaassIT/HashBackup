@@ -21,7 +21,10 @@ public sealed record RecoveryOptions(
     OnlineAccessTier RehydrateTier = OnlineAccessTier.Cool,
     ArchiveRehydratePriority RehydratePriority = ArchiveRehydratePriority.Standard,
     bool Overwrite = false,
-    bool DryRun = false);
+    bool DryRun = false,
+    bool VerifySource = false,
+    bool OnlyMissingContentMd5 = false,
+    string? ReportPath = null);
 
 public sealed record RecoveryResult(
     RecoveryStatus Status,
@@ -35,6 +38,12 @@ public sealed record RecoveryResult(
     /// kein Content-MD5 liefert. Deren Inhalt kann erst mit --deep geprüft werden.
     /// </summary>
     public int StructurallyVerifiedFiles { get; init; }
+
+    /// <summary>
+    /// Legacy-Objekte, deren erwarteter Hash gegen die vorhandene lokale
+    /// Quelldatei bestätigt wurde, ohne das Archive-Objekt herunterzuladen.
+    /// </summary>
+    public int LocalSourceVerifiedFiles { get; init; }
 }
 
 /// <summary>
@@ -48,11 +57,18 @@ public sealed class RecoveryService(
     string jobName = "Default")
 {
     private readonly RestorePathPolicy _pathPolicy = new(sourceFolders);
+    private readonly SourceVerificationService _sourceVerificationService = new(sourceFolders);
 
     public async Task<RecoveryResult> VerifyAsync(
         RecoveryOptions options,
         CancellationToken ct = default)
     {
+        if (options.VerifySource && sourceFolders.Count == 0)
+        {
+            Log.Error("--verify-source benötigt mindestens ein konfiguriertes Quellverzeichnis.");
+            return new RecoveryResult(RecoveryStatus.Failed, 0, 0, 0, 1);
+        }
+
         var loadedCatalog = await LoadCatalogAsync(options, ct);
         if (loadedCatalog.Result != null)
         {
@@ -61,13 +77,36 @@ public sealed class RecoveryService(
 
         var verifiedFiles = 0;
         var structurallyVerifiedFiles = 0;
+        var localSourceVerifiedFiles = 0;
         var pendingFiles = 0;
         var failedFiles = 0;
+        var reportRows = new List<VerificationReportRow>();
         var rehydrationRequests = new List<StorageObjectInfo>();
         var regularEntries = loadedCatalog.Catalog!.Entries
             .Where(entry => !entry.IsSymbolicLink && !entry.IsLegacyEmptyFile)
             .ToList();
         var contentIndex = await backend.IndexContentObjectsAsync(regularEntries.Select(entry => entry.Hash), ct);
+        var sourceVerificationEntries = options.VerifySource
+            ? regularEntries
+                .Where(entry => contentIndex.GetValueOrDefault(entry.Hash) is
+                {
+                    Availability: not StorageObjectAvailability.Missing,
+                    ContentHash: null,
+                    Length: not null
+                })
+                .Where(entry => contentIndex[entry.Hash].Length == entry.Size)
+                .ToList()
+            : [];
+        var sourceVerificationBytes = sourceVerificationEntries.Sum(entry => entry.Size);
+        var sourceChecksProcessed = 0;
+        long sourceBytesProcessed = 0;
+        if (sourceVerificationEntries.Count > 0)
+        {
+            Log.Information(
+                "Lokale Quellprüfung startet: {FileCount} Einträge, {TotalGiB:F2} GiB; Archive-Daten werden weder geladen noch rehydriert.",
+                sourceVerificationEntries.Count,
+                sourceVerificationBytes / 1024d / 1024d / 1024d);
+        }
 
         foreach (var entry in loadedCatalog.Catalog.Entries)
         {
@@ -75,13 +114,21 @@ public sealed class RecoveryService(
             if (entry.IsSymbolicLink)
             {
                 _ = entry.GetSymbolicLinkTarget();
-                verifiedFiles++;
+                if (!options.OnlyMissingContentMd5)
+                {
+                    verifiedFiles++;
+                }
+
                 continue;
             }
 
             if (entry.IsLegacyEmptyFile)
             {
-                verifiedFiles++;
+                if (!options.OnlyMissingContentMd5)
+                {
+                    verifiedFiles++;
+                }
+
                 continue;
             }
 
@@ -91,13 +138,69 @@ public sealed class RecoveryService(
             if (!ValidateStoredProperties(entry, inspection, out var propertyError))
             {
                 Log.Error("Verify fehlgeschlagen für {FileName}: {Reason}", entry.FileName, propertyError);
+                reportRows.Add(VerificationReportRow.Create(entry, inspection, "Failed", propertyError));
                 failedFiles++;
                 continue;
             }
 
             if (!options.DeepVerify && inspection.ContentHash == null)
             {
+                if (options.VerifySource)
+                {
+                    var sourceResult = await _sourceVerificationService.VerifyAsync(entry, ct);
+                    reportRows.Add(
+                        VerificationReportRow.Create(
+                            entry,
+                            inspection,
+                            sourceResult.Status.ToString(),
+                            sourceResult.Detail,
+                            sourceResult.CalculatedMd5,
+                            sourceResult.CalculatedSha256));
+                    if (sourceResult.Status == SourceVerificationStatus.LocalSourceVerified)
+                    {
+                        localSourceVerifiedFiles++;
+                    }
+                    else
+                    {
+                        Log.Error(
+                            "Lokale Quellprüfung fehlgeschlagen für {FileName}: {Reason}",
+                            entry.FileName,
+                            sourceResult.Detail);
+                        failedFiles++;
+                    }
+
+                    sourceChecksProcessed++;
+                    if (sourceResult.CalculatedMd5 != null)
+                    {
+                        sourceBytesProcessed += entry.Size;
+                    }
+                    if (sourceChecksProcessed % 10 == 0 ||
+                        sourceChecksProcessed == sourceVerificationEntries.Count)
+                    {
+                        Log.Information(
+                            "Lokale Quellprüfung: {Processed}/{Total} Einträge ({Percent:F1} %), {ProcessedGiB:F2}/{TotalGiB:F2} GiB gehasht.",
+                            sourceChecksProcessed,
+                            sourceVerificationEntries.Count,
+                            sourceChecksProcessed * 100d / sourceVerificationEntries.Count,
+                            sourceBytesProcessed / 1024d / 1024d / 1024d,
+                            sourceVerificationBytes / 1024d / 1024d / 1024d);
+                    }
+
+                    continue;
+                }
+
                 structurallyVerifiedFiles++;
+                reportRows.Add(
+                    VerificationReportRow.Create(
+                        entry,
+                        inspection,
+                        "StructurallyVerified",
+                        "Storage enthält kein Content-MD5; Existenz und Größe stimmen."));
+                continue;
+            }
+
+            if (options.OnlyMissingContentMd5 && inspection.ContentHash != null)
+            {
                 continue;
             }
 
@@ -118,15 +221,42 @@ public sealed class RecoveryService(
                         overwrite: false,
                         ct))
                 {
+                    reportRows.Add(
+                        VerificationReportRow.Create(
+                            entry,
+                            inspection,
+                            "Failed",
+                            "Heruntergeladener Inhalt stimmt nicht mit dem erwarteten Hash überein."));
                     failedFiles++;
                     continue;
                 }
             }
 
             verifiedFiles++;
+            reportRows.Add(
+                VerificationReportRow.Create(
+                    entry,
+                    inspection,
+                    options.DeepVerify ? "DeepVerified" : "Verified",
+                    options.DeepVerify
+                        ? "Inhalt heruntergeladen und erneut gehasht."
+                        : "Storage-Eigenschaften einschließlich Content-MD5 stimmen."));
         }
 
         await SubmitRehydrationRequestsAsync(rehydrationRequests, options, ct);
+
+        if (!string.IsNullOrWhiteSpace(options.ReportPath))
+        {
+            try
+            {
+                await VerificationReportWriter.WriteAsync(options.ReportPath, reportRows, ct);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Verify-Bericht konnte nicht sicher geschrieben werden: {ReportPath}", options.ReportPath);
+                failedFiles++;
+            }
+        }
 
         var status = DetermineStatus(failedFiles, pendingFiles);
         if (structurallyVerifiedFiles > 0)
@@ -136,6 +266,13 @@ public sealed class RecoveryService(
                 structurallyVerifiedFiles);
         }
 
+        if (localSourceVerifiedFiles > 0)
+        {
+            Log.Warning(
+                "{FileCount} lokale Quelldateien stimmen mit dem Katalog überein. Dieser Nachweis bestätigt nicht die Nutzdaten der zugehörigen Archive-Objekte; dafür ist weiterhin --deep erforderlich.",
+                localSourceVerifiedFiles);
+        }
+
         LogRecoverySummary(
             "Verify",
             status,
@@ -143,10 +280,12 @@ public sealed class RecoveryService(
             0,
             pendingFiles,
             failedFiles,
-            structurallyVerifiedFiles);
+            structurallyVerifiedFiles,
+            localSourceVerifiedFiles);
         return new RecoveryResult(status, verifiedFiles, 0, pendingFiles, failedFiles)
         {
-            StructurallyVerifiedFiles = structurallyVerifiedFiles
+            StructurallyVerifiedFiles = structurallyVerifiedFiles,
+            LocalSourceVerifiedFiles = localSourceVerifiedFiles
         };
     }
 
@@ -621,13 +760,15 @@ public sealed class RecoveryService(
         int restoredFiles,
         int pendingFiles,
         int failedFiles,
-        int structurallyVerifiedFiles = 0)
+        int structurallyVerifiedFiles = 0,
+        int localSourceVerifiedFiles = 0)
     {
         Log.Information(
-            "{Operation} abgeschlossen: Status={Status}, vollständig geprüft={VerifiedFiles}, nur strukturell geprüft={StructurallyVerifiedFiles}, wiederhergestellt={RestoredFiles}, Rehydration ausstehend={PendingFiles}, fehlgeschlagen={FailedFiles}",
+            "{Operation} abgeschlossen: Status={Status}, lokale Quelle gegen Katalog geprüft={LocalSourceVerifiedFiles}, Archive-Inhalt vollständig geprüft={VerifiedFiles}, nur strukturell geprüft={StructurallyVerifiedFiles}, wiederhergestellt={RestoredFiles}, Rehydration ausstehend={PendingFiles}, fehlgeschlagen={FailedFiles}",
             operation,
             status,
             verifiedFiles,
+            localSourceVerifiedFiles,
             structurallyVerifiedFiles,
             restoredFiles,
             pendingFiles,

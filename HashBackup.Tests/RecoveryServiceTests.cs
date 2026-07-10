@@ -88,6 +88,146 @@ public sealed class RecoveryServiceTests : IDisposable
         Assert.Equal(1, backend.DownloadCount);
     }
 
+    /// <summary>
+    /// Fehlendes Storage-Content-MD5 kann kostenfrei gegen die noch vorhandene
+    /// lokale Quelldatei geprüft werden. Dabei darf kein Archive-Download erfolgen.
+    /// </summary>
+    [Fact]
+    public async Task VerifyAsync_VerifiesLegacyObjectAgainstLocalSourceWithoutDownloading()
+    {
+        var sourceDirectory = Path.Combine(_temporaryDirectory, "source-verified");
+        Directory.CreateDirectory(sourceDirectory);
+        await File.WriteAllTextAsync(Path.Combine(sourceDirectory, "photo.txt"), "content");
+        var metadataFile = await CreateMetadataAsync(directory: sourceDirectory);
+        var reportPath = Path.Combine(_temporaryDirectory, "legacy-report.csv");
+        var backend = new FakeReadableBackend();
+        backend.Add(ObjectPath, "content", StorageObjectAvailability.Archived, includeContentHash: false);
+        var service = CreateService(backend, sourceDirectory);
+
+        var result = await service.VerifyAsync(
+            new RecoveryOptions(
+                metadataFile,
+                Destination: null,
+                VerifySource: true,
+                OnlyMissingContentMd5: true,
+                ReportPath: reportPath));
+
+        Assert.Equal(RecoveryStatus.Success, result.Status);
+        Assert.Equal(1, result.LocalSourceVerifiedFiles);
+        Assert.Equal(0, result.StructurallyVerifiedFiles);
+        Assert.Equal(0, result.FailedFiles);
+        Assert.Equal(0, backend.DownloadCount);
+        var report = await File.ReadAllTextAsync(reportPath);
+        var expectedSha256 = Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("content")));
+        Assert.Contains("LocalSourceVerified", report);
+        Assert.Contains(expectedSha256, report);
+    }
+
+    /// <summary>
+    /// Eine lokal veränderte Datei darf den fehlenden Storage-Nachweis nicht
+    /// ersetzen und muss den Verify-Lauf fehlschlagen lassen.
+    /// </summary>
+    [Fact]
+    public async Task VerifyAsync_FailsSourceVerificationWhenLocalContentChanged()
+    {
+        var sourceDirectory = Path.Combine(_temporaryDirectory, "source-changed");
+        Directory.CreateDirectory(sourceDirectory);
+        await File.WriteAllTextAsync(Path.Combine(sourceDirectory, "photo.txt"), "changed");
+        var metadataFile = await CreateMetadataAsync(directory: sourceDirectory);
+        var backend = new FakeReadableBackend();
+        backend.Add(ObjectPath, "content", StorageObjectAvailability.Archived, includeContentHash: false);
+        var service = CreateService(backend, sourceDirectory);
+
+        var result = await service.VerifyAsync(
+            new RecoveryOptions(metadataFile, Destination: null, VerifySource: true));
+
+        Assert.Equal(RecoveryStatus.Failed, result.Status);
+        Assert.Equal(0, result.LocalSourceVerifiedFiles);
+        Assert.Equal(1, result.FailedFiles);
+        Assert.Equal(0, backend.DownloadCount);
+    }
+
+    /// <summary>
+    /// Ein nach der Sicherung eingeschleuster Symlink darf die lokale Quellprüfung
+    /// nicht aus der konfigurierten Quelle heraus umleiten.
+    /// </summary>
+    [Fact]
+    public async Task VerifyAsync_RejectsSymlinkDuringLocalSourceVerification()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sourceDirectory = Path.Combine(_temporaryDirectory, "source-symlink");
+        var outsideFile = Path.Combine(_temporaryDirectory, "outside.txt");
+        Directory.CreateDirectory(sourceDirectory);
+        await File.WriteAllTextAsync(outsideFile, "content");
+        File.CreateSymbolicLink(Path.Combine(sourceDirectory, "photo.txt"), outsideFile);
+        var metadataFile = await CreateMetadataAsync(directory: sourceDirectory);
+        var backend = new FakeReadableBackend();
+        backend.Add(ObjectPath, "content", StorageObjectAvailability.Archived, includeContentHash: false);
+        var service = CreateService(backend, sourceDirectory);
+
+        var result = await service.VerifyAsync(
+            new RecoveryOptions(metadataFile, Destination: null, VerifySource: true));
+
+        Assert.Equal(RecoveryStatus.Failed, result.Status);
+        Assert.Equal(0, result.LocalSourceVerifiedFiles);
+        Assert.Equal(1, result.FailedFiles);
+        Assert.Equal(0, backend.DownloadCount);
+    }
+
+    /// <summary>
+    /// Dateinamen aus den Metadaten dürfen beim Öffnen des CSV-Berichts in einer
+    /// Tabellenkalkulation nicht als Formel ausgeführt werden.
+    /// </summary>
+    [Fact]
+    public async Task VerifyAsync_ReportNeutralizesSpreadsheetFormulaFilename()
+    {
+        var sourceDirectory = Path.Combine(_temporaryDirectory, "source-formula-report");
+        Directory.CreateDirectory(sourceDirectory);
+        await File.WriteAllTextAsync(Path.Combine(sourceDirectory, "=formula.txt"), "content");
+        var metadataFile = await CreateMetadataAsync(directory: sourceDirectory, fileName: "=formula.txt");
+        var reportPath = Path.Combine(_temporaryDirectory, "formula-report.csv");
+        var backend = new FakeReadableBackend();
+        backend.Add(ObjectPath, "content", StorageObjectAvailability.Archived, includeContentHash: false);
+        var service = CreateService(backend, sourceDirectory);
+
+        var result = await service.VerifyAsync(
+            new RecoveryOptions(metadataFile, Destination: null, VerifySource: true, ReportPath: reportPath));
+
+        Assert.Equal(RecoveryStatus.Success, result.Status);
+        Assert.Contains("'=formula.txt", await File.ReadAllTextAsync(reportPath));
+    }
+
+    /// <summary>
+    /// Der Legacy-Filter überspringt Objekte mit vorhandenem, passendem
+    /// Storage-Content-MD5, damit eine gezielte Prüfung keine Archive-Downloads
+    /// oder unnötigen lokalen Datei-I/O auslöst.
+    /// </summary>
+    [Fact]
+    public async Task VerifyAsync_LegacyFilterSkipsObjectWithContentMd5()
+    {
+        var metadataFile = await CreateMetadataAsync();
+        var backend = new FakeReadableBackend();
+        backend.Add(ObjectPath, "content", StorageObjectAvailability.Archived);
+        var service = CreateService(backend);
+
+        var result = await service.VerifyAsync(
+            new RecoveryOptions(
+                metadataFile,
+                Destination: null,
+                VerifySource: true,
+                OnlyMissingContentMd5: true));
+
+        Assert.Equal(RecoveryStatus.Success, result.Status);
+        Assert.Equal(0, result.VerifiedFiles);
+        Assert.Equal(0, result.LocalSourceVerifiedFiles);
+        Assert.Equal(0, backend.DownloadCount);
+    }
+
     [Fact]
     public async Task VerifyAsync_DeepVerificationRequestsRehydrationAndReturnsPending()
     {
@@ -297,8 +437,8 @@ public sealed class RecoveryServiceTests : IDisposable
         Assert.False(File.Exists(Path.Combine(outside, "photo.txt")));
     }
 
-    private RecoveryService CreateService(FakeReadableBackend backend) =>
-        new(backend, targetDirectoryDepth: 3, sourceFolders: ["/data/bilder"]);
+    private RecoveryService CreateService(FakeReadableBackend backend, string sourceFolder = "/data/bilder") =>
+        new(backend, targetDirectoryDepth: 3, sourceFolders: [sourceFolder]);
 
     private async Task<string> CreateMetadataAsync(
         string directory = "/data/bilder",
