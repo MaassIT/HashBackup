@@ -35,6 +35,59 @@ public sealed class RecoveryServiceTests : IDisposable
         Assert.Equal(0, backend.RehydrationCount);
     }
 
+    /// <summary>
+    /// Legacy-Blobs besitzen teilweise kein vom Storage geliefertes Content-MD5.
+    /// Eine flache Prüfung darf sie nach erfolgreicher Existenz-/Größenprüfung nicht
+    /// als beschädigt melden, muss den fehlenden kryptografischen Nachweis aber
+    /// separat ausweisen und darf das Archive-Objekt nicht herunterladen.
+    /// </summary>
+    [Fact]
+    public async Task VerifyAsync_ReportsLegacyObjectWithoutContentMd5AsStructurallyVerified()
+    {
+        var metadataFile = await CreateMetadataAsync();
+        var backend = new FakeReadableBackend();
+        backend.Add(
+            ObjectPath,
+            "content",
+            StorageObjectAvailability.Archived,
+            includeContentHash: false);
+        var service = CreateService(backend);
+
+        var result = await service.VerifyAsync(
+            new RecoveryOptions(metadataFile, Destination: null, DeepVerify: false));
+
+        Assert.Equal(RecoveryStatus.Success, result.Status);
+        Assert.Equal(0, result.VerifiedFiles);
+        Assert.Equal(1, result.StructurallyVerifiedFiles);
+        Assert.Equal(0, result.FailedFiles);
+        Assert.Equal(0, backend.DownloadCount);
+    }
+
+    /// <summary>
+    /// Bei einer tiefen Prüfung wird ein fehlendes Storage-Content-MD5 nicht
+    /// benötigt, weil HashBackup den heruntergeladenen Inhalt selbst validiert.
+    /// </summary>
+    [Fact]
+    public async Task VerifyAsync_DeeplyVerifiesOnlineObjectWithoutContentMd5()
+    {
+        var metadataFile = await CreateMetadataAsync();
+        var backend = new FakeReadableBackend();
+        backend.Add(
+            ObjectPath,
+            "content",
+            StorageObjectAvailability.Online,
+            includeContentHash: false);
+        var service = CreateService(backend);
+
+        var result = await service.VerifyAsync(
+            new RecoveryOptions(metadataFile, Destination: null, DeepVerify: true));
+
+        Assert.Equal(RecoveryStatus.Success, result.Status);
+        Assert.Equal(1, result.VerifiedFiles);
+        Assert.Equal(0, result.StructurallyVerifiedFiles);
+        Assert.Equal(1, backend.DownloadCount);
+    }
+
     [Fact]
     public async Task VerifyAsync_DeepVerificationRequestsRehydrationAndReturnsPending()
     {
@@ -285,13 +338,16 @@ public sealed class RecoveryServiceTests : IDisposable
             string content,
             StorageObjectAvailability availability,
             string? advertisedHash = null,
-            long? advertisedLength = null)
+            long? advertisedLength = null,
+            bool includeContentHash = true)
         {
             var bytes = System.Text.Encoding.UTF8.GetBytes(content);
             _objects[objectPath] = new FakeObject(
                 bytes,
                 availability,
-                advertisedHash ?? Convert.ToHexStringLower(System.Security.Cryptography.MD5.HashData(bytes)),
+                includeContentHash
+                    ? advertisedHash ?? Convert.ToHexStringLower(System.Security.Cryptography.MD5.HashData(bytes))
+                    : null,
                 advertisedLength ?? bytes.LongLength);
         }
 
@@ -355,7 +411,7 @@ public sealed class RecoveryServiceTests : IDisposable
         private sealed record FakeObject(
             byte[] Content,
             StorageObjectAvailability Availability,
-            string Hash,
+            string? Hash,
             long Length);
     }
 }

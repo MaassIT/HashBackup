@@ -28,7 +28,14 @@ public sealed record RecoveryResult(
     int VerifiedFiles,
     int RestoredFiles,
     int PendingFiles,
-    int FailedFiles);
+    int FailedFiles)
+{
+    /// <summary>
+    /// Objekte, deren Existenz und Größe geprüft wurden, für die der Storage aber
+    /// kein Content-MD5 liefert. Deren Inhalt kann erst mit --deep geprüft werden.
+    /// </summary>
+    public int StructurallyVerifiedFiles { get; init; }
+}
 
 /// <summary>
 /// Führt eigenschaftsbasierte und tiefe Integritätsprüfungen sowie sichere,
@@ -53,6 +60,7 @@ public sealed class RecoveryService(
         }
 
         var verifiedFiles = 0;
+        var structurallyVerifiedFiles = 0;
         var pendingFiles = 0;
         var failedFiles = 0;
         var rehydrationRequests = new List<StorageObjectInfo>();
@@ -80,10 +88,16 @@ public sealed class RecoveryService(
             var expectedObjectPath = entry.GetObjectPath(targetDirectoryDepth)!;
             var inspection = contentIndex.GetValueOrDefault(entry.Hash) ?? StorageObjectInfo.Missing(expectedObjectPath);
             var objectPath = inspection.ObjectPath;
-            if (!ValidateStoredProperties(entry, inspection, options.DeepVerify, out var propertyError))
+            if (!ValidateStoredProperties(entry, inspection, out var propertyError))
             {
                 Log.Error("Verify fehlgeschlagen für {FileName}: {Reason}", entry.FileName, propertyError);
                 failedFiles++;
+                continue;
+            }
+
+            if (!options.DeepVerify && inspection.ContentHash == null)
+            {
+                structurallyVerifiedFiles++;
                 continue;
             }
 
@@ -115,8 +129,25 @@ public sealed class RecoveryService(
         await SubmitRehydrationRequestsAsync(rehydrationRequests, options, ct);
 
         var status = DetermineStatus(failedFiles, pendingFiles);
-        LogRecoverySummary("Verify", status, verifiedFiles, 0, pendingFiles, failedFiles);
-        return new RecoveryResult(status, verifiedFiles, 0, pendingFiles, failedFiles);
+        if (structurallyVerifiedFiles > 0)
+        {
+            Log.Warning(
+                "{FileCount} Legacy-Objekte wurden nur anhand von Existenz und Größe geprüft, weil der Storage kein Content-MD5 liefert. Für eine vollständige Inhaltsprüfung --deep verwenden; Archive-Daten werden dabei nur mit --rehydrate kostenpflichtig angefordert.",
+                structurallyVerifiedFiles);
+        }
+
+        LogRecoverySummary(
+            "Verify",
+            status,
+            verifiedFiles,
+            0,
+            pendingFiles,
+            failedFiles,
+            structurallyVerifiedFiles);
+        return new RecoveryResult(status, verifiedFiles, 0, pendingFiles, failedFiles)
+        {
+            StructurallyVerifiedFiles = structurallyVerifiedFiles
+        };
     }
 
     public async Task<RecoveryResult> RestoreAsync(
@@ -151,7 +182,7 @@ public sealed class RecoveryService(
             ct.ThrowIfCancellationRequested();
             var expectedObjectPath = entry.GetObjectPath(targetDirectoryDepth)!;
             var inspection = contentIndex.GetValueOrDefault(entry.Hash) ?? StorageObjectInfo.Missing(expectedObjectPath);
-            if (!ValidateStoredProperties(entry, inspection, deepVerificationPlanned: true, out var propertyError))
+            if (!ValidateStoredProperties(entry, inspection, out var propertyError))
             {
                 Log.Error("Restore-Vorprüfung fehlgeschlagen für {FileName}: {Reason}", entry.FileName, propertyError);
                 failedFiles++;
@@ -370,7 +401,6 @@ public sealed class RecoveryService(
     private static bool ValidateStoredProperties(
         BackupMetadataEntry entry,
         StorageObjectInfo inspection,
-        bool deepVerificationPlanned,
         out string? error)
     {
         if (inspection.Availability == StorageObjectAvailability.Missing)
@@ -387,14 +417,11 @@ public sealed class RecoveryService(
 
         if (inspection.ContentHash == null)
         {
-            if (deepVerificationPlanned)
-            {
-                error = null;
-                return true;
-            }
-
-            error = "Storage enthält keinen prüfbaren Content-MD5; --deep ist erforderlich.";
-            return false;
+            // Alte Azure-Blobs können ohne Content-MD5 vorliegen. Existenz und
+            // Größe bleiben prüfbar; Verify weist diesen eingeschränkten Nachweis
+            // separat aus. Restore und --deep validieren den Download selbst.
+            error = null;
+            return true;
         }
 
         if (!string.Equals(inspection.ContentHash, entry.Hash, StringComparison.OrdinalIgnoreCase))
@@ -593,13 +620,15 @@ public sealed class RecoveryService(
         int verifiedFiles,
         int restoredFiles,
         int pendingFiles,
-        int failedFiles)
+        int failedFiles,
+        int structurallyVerifiedFiles = 0)
     {
         Log.Information(
-            "{Operation} abgeschlossen: Status={Status}, geprüft={VerifiedFiles}, wiederhergestellt={RestoredFiles}, Rehydration ausstehend={PendingFiles}, fehlgeschlagen={FailedFiles}",
+            "{Operation} abgeschlossen: Status={Status}, vollständig geprüft={VerifiedFiles}, nur strukturell geprüft={StructurallyVerifiedFiles}, wiederhergestellt={RestoredFiles}, Rehydration ausstehend={PendingFiles}, fehlgeschlagen={FailedFiles}",
             operation,
             status,
             verifiedFiles,
+            structurallyVerifiedFiles,
             restoredFiles,
             pendingFiles,
             failedFiles);

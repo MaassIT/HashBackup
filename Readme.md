@@ -161,6 +161,13 @@ lesbar sind:
 HashBackup verify /pfad/zur/backup_config.ini --metadata latest
 ```
 
+Bei älteren Blobs kann das Storage-Content-MD5 fehlen. HashBackup wertet eine
+erfolgreiche Existenz- und Größenprüfung dann nicht als Schaden, weist diese Objekte
+aber gesammelt als **nur strukturell geprüft** aus. Der Befehl bleibt erfolgreich;
+erst `--deep` bestätigt den Inhalt dieser Objekte durch einen eigenen MD5-Lauf.
+Dadurch bleiben flache Prüfungen auch für Archive ohne kostenpflichtige Rehydration
+nutzbar, ohne einen kryptografischen Nachweis vorzutäuschen.
+
 Eine vollständige Prüfung lädt jedes Objekt herunter und berechnet den MD5 erneut:
 
 ```bash
