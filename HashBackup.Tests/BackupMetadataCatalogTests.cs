@@ -42,4 +42,22 @@ public sealed class BackupMetadataCatalogTests
         await Assert.ThrowsAsync<InvalidDataException>(
             () => BackupMetadataCatalog.ParseAsync(new StringReader(metadata)));
     }
+
+    [Fact]
+    public async Task ParseAsync_RecoversLegacyUnquotedFilenameContainingComma()
+    {
+        // Older C# metadata wrote raw filenames. Recover the record from its five
+        // stable trailing columns so existing production catalogs remain restorable.
+        const string metadata = """
+            EOF
+
+            Filename,Hash,Extension,Size,Modified Time,InQueue
+            dir >> /data/bilder
+            Essen, Sommer.jpg,9a0364b9e99bb480dd25e1f0284c8555,.jpg,7,134123456789000000,
+            """;
+
+        var catalog = await BackupMetadataCatalog.ParseAsync(new StringReader(metadata));
+
+        Assert.Equal("Essen, Sommer.jpg", Assert.Single(catalog.Entries).FileName);
+    }
 }

@@ -161,6 +161,8 @@ public sealed class BackupMetadataCatalog
             throw new InvalidDataException("Metadaten-CSV enthält einen unvollständigen Dateieintrag.");
         }
 
+        fields = NormalizeLegacyUnquotedFilename(fields);
+
         var fileName = fields[0];
         if (string.IsNullOrWhiteSpace(fileName) ||
             fileName is "." or ".." ||
@@ -201,6 +203,28 @@ public sealed class BackupMetadataCatalog
         }
 
         return new BackupMetadataEntry(directory, fileName, hash, extension, size, fields[4]);
+    }
+
+    private static IReadOnlyList<string> NormalizeLegacyUnquotedFilename(IReadOnlyList<string> fields)
+    {
+        if (fields.Count == 6)
+        {
+            return fields;
+        }
+
+        // Legacy C# catalogs did not quote commas in filenames. Hash, extension,
+        // size, mtime and queue marker are stable trailing columns, so every
+        // preceding fragment belongs to the original filename.
+        var trailingColumnStart = fields.Count - 5;
+        return
+        [
+            string.Join(',', fields.Take(trailingColumnStart)),
+            fields[trailingColumnStart],
+            fields[trailingColumnStart + 1],
+            fields[trailingColumnStart + 2],
+            fields[trailingColumnStart + 3],
+            fields[trailingColumnStart + 4]
+        ];
     }
 
     private static bool IsCompleteCsvRecord(string value)
