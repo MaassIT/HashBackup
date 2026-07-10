@@ -19,7 +19,7 @@ public class Application(string[] args)
         try
         {
             // Hilfe anzeigen, wenn keine Argumente vorhanden sind oder Hilfe angefordert wird
-            if (args.Length < 1 || args.Contains("--help", StringComparer.OrdinalIgnoreCase) || args.Contains("-h", StringComparer.OrdinalIgnoreCase))
+            if (args.Length < 1 || CommandLineParser.IsHelpRequested(args))
             {
                 ShowHelp();
                 return 0;
@@ -148,7 +148,7 @@ public class Application(string[] args)
         Console.WriteLine();
         Console.WriteLine("Parameter:");
         Console.WriteLine("  <config-file>            Pfad zur Konfigurationsdatei (.ini oder .json)");
-        Console.WriteLine("  -h, --help               Zeigt diese Hilfe an");
+        Console.WriteLine("  -h, --help, -?, /?       Zeigt diese Hilfe an (auch: help, /h, /help)");
         Console.WriteLine();
         Console.WriteLine("Optionen:");
         Console.WriteLine("  -s, --source <path>      Quellverzeichnis für das Backup");

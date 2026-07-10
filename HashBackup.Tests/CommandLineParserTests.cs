@@ -9,6 +9,29 @@ namespace HashBackup.Tests;
 /// </summary>
 public sealed class CommandLineParserTests
 {
+    /// <summary>
+    /// Neben den bisherigen Unix-Schaltern werden die unter Windows üblichen
+    /// Fragezeichen- und Slash-Varianten sowie ein lesbarer help-Befehl erkannt.
+    /// </summary>
+    [Theory]
+    [InlineData("--help")]
+    [InlineData("-h")]
+    [InlineData("-?")]
+    [InlineData("/?")]
+    [InlineData("/h")]
+    [InlineData("/help")]
+    [InlineData("HELP")]
+    public void IsHelpRequested_AcceptsCommonHelpAliases(string argument)
+    {
+        Assert.True(CommandLineParser.IsHelpRequested([argument]));
+    }
+
+    [Fact]
+    public void IsHelpRequested_RejectsNormalInvocation()
+    {
+        Assert.False(CommandLineParser.IsHelpRequested(["config.ini", "-sm"]));
+    }
+
     [Fact]
     public void Parse_PreservesLegacyBackupInvocation()
     {

@@ -36,6 +36,24 @@ public sealed record CommandLineRequest(
 /// </summary>
 public static class CommandLineParser
 {
+    private static readonly HashSet<string> HelpAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "--help",
+        "-h",
+        "-?",
+        "/?",
+        "/h",
+        "/help",
+        "help"
+    };
+
+    /// <summary>
+    /// Erkennt verbreitete Unix- und Windows-Hilfevarianten unabhängig von der
+    /// Groß-/Kleinschreibung. So funktioniert die Hilfe auch ohne Konfigurationsdatei.
+    /// </summary>
+    public static bool IsHelpRequested(IEnumerable<string> args) =>
+        args.Any(HelpAliases.Contains);
+
     public static CommandLineRequest Parse(string[] args)
     {
         if (args.Length == 0)

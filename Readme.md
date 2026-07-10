@@ -65,6 +65,10 @@ explizit angegeben werden:
 HashBackup backup /pfad/zur/backup_config.ini -sm
 ```
 
+Die Hilfe ist ohne Konfigurationsdatei über mehrere gebräuchliche Varianten
+erreichbar: `HashBackup --help`, `HashBackup -h`, `HashBackup -?`,
+`HashBackup /?` oder `HashBackup help`.
+
 Oder mit JSON-Konfiguration:
 
 ```bash
