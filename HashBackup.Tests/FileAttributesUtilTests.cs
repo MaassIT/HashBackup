@@ -1,6 +1,5 @@
 using System.Runtime.Versioning;
 using HashBackup.Utils;
-using Xunit.Sdk;
 
 namespace HashBackup.Tests;
 
@@ -31,12 +30,10 @@ public sealed class FileAttributesUtilTests : IDisposable
     /// HashBackup muss seine xattrs trotzdem dauerhaft setzen können, ohne den
     /// ursprünglichen Dateimodus zu verändern.
     /// </summary>
-    [Fact]
+    [MacOsFact]
     [SupportedOSPlatform("macos")]
     public void SetAttribute_PersistsValueOnReadOnlyMacOsFile_AndRestoresMode()
     {
-        SkipUnlessMacOs();
-
         File.WriteAllText(_filePath, "test");
         const UnixFileMode readOnlyMode =
             UnixFileMode.UserRead |
@@ -55,12 +52,10 @@ public sealed class FileAttributesUtilTests : IDisposable
     /// Auch wenn der zweite xattr-Aufruf nach dem temporären chmod fehlschlägt,
     /// muss der ursprüngliche 0444-Modus wiederhergestellt werden.
     /// </summary>
-    [Fact]
+    [MacOsFact]
     [SupportedOSPlatform("macos")]
     public void SetAttribute_RestoresReadOnlyMode_WhenRetryFails()
     {
-        SkipUnlessMacOs();
-
         File.WriteAllText(_filePath, "test");
         const UnixFileMode readOnlyMode =
             UnixFileMode.UserRead |
@@ -80,14 +75,9 @@ public sealed class FileAttributesUtilTests : IDisposable
     /// auf dessen Ziel geschrieben werden. Das Ziel kann außerhalb des
     /// Backup-Baums liegen.
     /// </summary>
-    [Fact]
+    [UnixFact]
     public void SetAttribute_OnUnixSymlink_DoesNotModifyTarget()
     {
-        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
-        {
-            throw SkipException.ForSkip("Dieser Symlink-xattr-Test benötigt macOS oder Linux.");
-        }
-
         File.WriteAllText(_filePath, "target");
         var symlinkPath = $"{_filePath}-link";
         File.CreateSymbolicLink(symlinkPath, _filePath);
@@ -111,20 +101,41 @@ public sealed class FileAttributesUtilTests : IDisposable
         }
     }
 
-    private static void SkipUnlessMacOs()
-    {
-        if (!OperatingSystem.IsMacOS())
-        {
-            throw SkipException.ForSkip("Dieser xattr-Rechte-Test benötigt macOS.");
-        }
-    }
-
     public void Dispose()
     {
         FileAttributesUtil.ClearCache();
         if (File.Exists(_filePath))
         {
             File.Delete(_filePath);
+        }
+    }
+}
+
+/// <summary>
+/// Markiert einen Test unter xUnit 2 sichtbar als übersprungen, wenn der
+/// benötigte macOS-Kernelpfad auf dem Runner nicht verfügbar ist.
+/// </summary>
+public sealed class MacOsFactAttribute : FactAttribute
+{
+    public MacOsFactAttribute()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            Skip = "Dieser xattr-Rechte-Test benötigt macOS.";
+        }
+    }
+}
+
+/// <summary>
+/// Begrenzt Symlink-xattr-Tests auf die beiden unterstützten Unix-Plattformen.
+/// </summary>
+public sealed class UnixFactAttribute : FactAttribute
+{
+    public UnixFactAttribute()
+    {
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
+        {
+            Skip = "Dieser Symlink-xattr-Test benötigt macOS oder Linux.";
         }
     }
 }
