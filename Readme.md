@@ -11,6 +11,7 @@
 - 🔌 **Modular erweiterbar** (Storage-Backend-Architektur)
 - 🔄 **Wiederaufnahme von fehlgeschlagenen Uploads** mit automatischem Retry
 - 🛠️ **Plattformübergreifend** (Linux/macOS: xattr, Windows: NTFS ADS)
+- 🍎 **macOS-kompatible Git-Sicherung** mit xattrs auf 0444-Objekten bei unverändert wiederhergestellten Dateirechten
 - 🖥️ **Parallele Uploads** für hohe Performance
 - 🔒 **Locking-Mechanismus**, um parallele Backups zu verhindern
 - 📝 **Backup-Metadaten als CSV**

@@ -1,12 +1,20 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using Microsoft.Win32.SafeHandles;
 
 namespace HashBackup.Utils;
 
 [SuppressMessage("Interoperability", "SYSLIB1054:Verwenden Sie \\\"LibraryImportAttribute\\\" anstelle von \\\"DllImportAttribute\\\", um P/Invoke-Marshallingcode zur Kompilierzeit zu generieren.")]
 public static class FileAttributesUtil
 {
+    private const int PermissionDeniedError = 13;
+    private const int MacOsOpenReadOnly = 0x00000000;
+    private const int MacOsOpenNoFollow = 0x00000100;
+    private const int MacOsOpenCloseOnExec = 0x01000000;
+    private const int MacOsXattrNoFollow = 0x0001;
+
     // Cache für Attribute, um wiederholte Zugriffe zu vermeiden
     private static readonly ConcurrentDictionary<string, string> AttributeCache = new();
 
@@ -27,13 +35,31 @@ public static class FileAttributesUtil
             try
             {
                 var bytes = System.Text.Encoding.UTF8.GetBytes(value);
-                if (setxattr(filePath, attrName, bytes, bytes.Length, 0, 0) != 0)
+                var errorCode = TrySetExtendedAttribute(filePath, attrName, bytes);
+
+                // Lose Git-Objekte sind auf macOS normalerweise absichtlich 0444.
+                // macOS verweigert dort auch dem Eigentümer xattr-Schreibzugriffe.
+                // Für genau diesen Fall wird das Eigentümer-Schreibrecht nur für
+                // den xattr-Aufruf ergänzt und anschließend sicher zurückgesetzt.
+                if (OperatingSystem.IsMacOS() && errorCode == PermissionDeniedError)
+                {
+                    errorCode = TrySetExtendedAttributeOnReadOnlyFile(
+                        filePath,
+                        attrName,
+                        bytes,
+                        errorCode,
+                        out var retryErrorCode)
+                            ? 0
+                            : retryErrorCode;
+                }
+
+                if (errorCode != 0)
                 {
                     Log.Warning(
                         "Fehler beim Setzen des Attributs {AttrName} für {FilePath}: errno={ErrorCode}",
                         attrName,
                         filePath,
-                        Marshal.GetLastPInvokeError());
+                        errorCode);
                     return;
                 }
 
@@ -44,6 +70,112 @@ public static class FileAttributesUtil
             catch (Exception ex)
             {
                 Log.Warning(ex, "Fehler beim Setzen des Attributs {AttrName} für {FilePath}", attrName, filePath);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Führt den nativen xattr-Schreibzugriff aus und liefert im Fehlerfall errno.
+    /// </summary>
+    private static int TrySetExtendedAttribute(string filePath, string attrName, byte[] bytes)
+    {
+#if !WINDOWS
+        // Datei-Symlinks dürfen nicht dazu führen, dass HashBackup Attribute auf
+        // einem Ziel außerhalb des Sicherungsbaums schreibt. Linux stellt dafür
+        // eigene l*()-Funktionen bereit, macOS nutzt XATTR_NOFOLLOW.
+        if (OperatingSystem.IsLinux())
+        {
+            return lsetxattr(filePath, attrName, bytes, (nuint)bytes.Length, 0) == 0
+                ? 0
+                : Marshal.GetLastPInvokeError();
+        }
+
+        var options = OperatingSystem.IsMacOS() ? MacOsXattrNoFollow : 0;
+        return setxattr(filePath, attrName, bytes, bytes.Length, 0, options) == 0
+            ? 0
+            : Marshal.GetLastPInvokeError();
+#else
+        return 0;
+#endif
+    }
+
+    /// <summary>
+    /// Wiederholt einen auf macOS wegen 0444 fehlgeschlagenen xattr-Schreibzugriff.
+    /// Symbolische Links werden bewusst nicht verändert. Der ursprüngliche Modus
+    /// wird auch dann wiederhergestellt, wenn der zweite xattr-Aufruf fehlschlägt.
+    /// </summary>
+    [SupportedOSPlatform("macos")]
+    private static bool TrySetExtendedAttributeOnReadOnlyFile(
+        string filePath,
+        string attrName,
+        byte[] bytes,
+        int initialErrorCode,
+        out int errorCode)
+    {
+        errorCode = initialErrorCode;
+        UnixFileMode originalMode = default;
+        var modeWasChanged = false;
+        SafeFileHandle? fileHandle = null;
+
+        try
+        {
+            var fileDescriptor = open(
+                filePath,
+                MacOsOpenReadOnly | MacOsOpenNoFollow | MacOsOpenCloseOnExec);
+            if (fileDescriptor < 0)
+            {
+                errorCode = Marshal.GetLastPInvokeError();
+                return false;
+            }
+
+            fileHandle = new SafeFileHandle((IntPtr)fileDescriptor, ownsHandle: true);
+            originalMode = File.GetUnixFileMode(fileHandle);
+            if (originalMode.HasFlag(UnixFileMode.UserWrite))
+            {
+                // Wenn die Datei bereits für den Eigentümer schreibbar war, liegt
+                // errno=EACCES nicht am für Git typischen 0444-Dateimodus.
+                return false;
+            }
+
+            File.SetUnixFileMode(fileHandle, originalMode | UnixFileMode.UserWrite);
+            modeWasChanged = true;
+            errorCode = fsetxattr(fileHandle, attrName, bytes, bytes.Length, 0, 0) == 0
+                ? 0
+                : Marshal.GetLastPInvokeError();
+            return errorCode == 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Debug(
+                ex,
+                "Temporäres Eigentümer-Schreibrecht für xattr konnte bei {FilePath} nicht verwendet werden",
+                filePath);
+            return false;
+        }
+        finally
+        {
+            try
+            {
+                if (modeWasChanged)
+                {
+                    try
+                    {
+                        File.SetUnixFileMode(fileHandle!, originalMode);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Ein nicht wiederhergestellter 0444-Modus ist sicherheitsrelevant
+                        // und darf deshalb nicht nur als Debug-Hinweis erscheinen.
+                        Log.Error(
+                            ex,
+                            "Ursprüngliche Dateirechte konnten nach dem xattr-Schreibzugriff nicht wiederhergestellt werden: {FilePath}",
+                            filePath);
+                    }
+                }
+            }
+            finally
+            {
+                fileHandle?.Dispose();
             }
         }
     }
@@ -94,14 +226,30 @@ public static class FileAttributesUtil
 #if !WINDOWS
             // Determine the required size first. HashBackup stores short hashes as well as
             // potentially long Base64-encoded symlink targets, so a fixed buffer is unsafe.
-            var requiredSize = getxattr(filePath, attrName, null, 0);
+            var requiredSize = OperatingSystem.IsLinux()
+                ? lgetxattr(filePath, attrName, null, 0)
+                : getxattr(
+                    filePath,
+                    attrName,
+                    null,
+                    0,
+                    0,
+                    OperatingSystem.IsMacOS() ? MacOsXattrNoFollow : 0);
             if (requiredSize <= 0 || requiredSize > int.MaxValue)
             {
                 return null;
             }
 
             var buffer = new byte[(int)requiredSize];
-            var readSize = getxattr(filePath, attrName, buffer, (ulong)buffer.Length);
+            var readSize = OperatingSystem.IsLinux()
+                ? lgetxattr(filePath, attrName, buffer, (nuint)buffer.Length)
+                : getxattr(
+                    filePath,
+                    attrName,
+                    buffer,
+                    (ulong)buffer.Length,
+                    0,
+                    OperatingSystem.IsMacOS() ? MacOsXattrNoFollow : 0);
             if (readSize <= 0) return null;
 
             var result = System.Text.Encoding.UTF8.GetString(buffer[..(int)readSize]);
@@ -215,6 +363,15 @@ public static class FileAttributesUtil
     [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi)]
     private static extern int setxattr([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, byte[] value, int size, int position, int options);
 
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern int lsetxattr([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, byte[] value, nuint size, int flags);
+
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern int fsetxattr(SafeFileHandle fileDescriptor, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, byte[] value, int size, int position, int options);
+
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern int open([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
+
     // Korrigierte Signatur für getxattr (nutze long und ulong für Kompatibilität)
     [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi)]
     private static extern long getxattr(
@@ -225,6 +382,13 @@ public static class FileAttributesUtil
         uint position = 0,
         int options = 0
     );
+
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern long lgetxattr(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
+        byte[]? value,
+        nuint size);
 #endif
 
     // Neue Methode zur Berechnung der optimalen Batchgröße
