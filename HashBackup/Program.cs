@@ -1,4 +1,4 @@
-﻿// Konfiguriere den Logger vorläufig mit Info-Level
+// Konfiguriere den Logger vorläufig mit Info-Level
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .WriteTo.Console(
@@ -10,15 +10,14 @@ try
 {
     // Erstellen und Ausführen der Anwendung
     var app = new Application(args);
-    await app.RunAsync();
+    Environment.ExitCode = await app.RunAsync();
 }
-catch (Exception ex)
+catch
 {
-    Log.Fatal(ex, "Ein schwerwiegender Fehler ist aufgetreten");
+    // Application.RunAsync already writes the exception once with full context.
+    Environment.ExitCode = 1;
 }
 finally
 {
     Log.CloseAndFlush();
 }
-
-

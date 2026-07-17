@@ -5,10 +5,10 @@ namespace HashBackup;
 public class ConfigLoader
 {
     private IConfiguration Configuration { get; set; }
-    
+
     // Dictionary zur Verfolgung der Konfigurationsquellen
     private Dictionary<string, string> ConfigSources { get; set; }
-    
+
     private const string SourceFile = "Konfigurationsdatei";
     private const string SourceEnv = "Umgebungsvariable";
     private const string SourceCmdline = "Kommandozeile";
@@ -18,26 +18,26 @@ public class ConfigLoader
     {
         Log.Debug("Lade Konfiguration aus Datei: {ConfigPath}", configPath);
         ConfigSources = new Dictionary<string, string>();
-            
+
         // Konfigurationsbuilder erstellen
         var builder = new ConfigurationBuilder()
             .SetBasePath(Path.GetDirectoryName(configPath) ?? throw new InvalidOperationException())
-            .SetFileLoadExceptionHandler(context => 
+            .SetFileLoadExceptionHandler(context =>
             {
-                Log.Error(context.Exception, "Fehler beim Laden der Konfigurationsdatei {Path}", 
+                Log.Error(context.Exception, "Fehler beim Laden der Konfigurationsdatei {Path}",
                     context.Provider.Source.Path);
             });
-        
+
         // Erstelle separate Konfigurationsobjekte für jede Quelle,
         // um die Quelle der Werte verfolgen zu können
         IConfiguration? fileConfig;
-            
+
         // Je nach Dateierweiterung den passenden Provider verwenden
         if (configPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
         {
-            builder.AddJsonFile(Path.GetFileName(configPath), optional: false, reloadOnChange: true);
+            builder.AddJsonFile(Path.GetFileName(configPath), optional: false, reloadOnChange: false);
             Log.Debug("JSON-Konfigurationsprovider konfiguriert für {Path}", configPath);
-            
+
             // Separate Konfiguration nur für die Datei
             var fileBuilder = new ConfigurationBuilder()
                 .SetBasePath(Path.GetDirectoryName(configPath)!)
@@ -46,9 +46,9 @@ public class ConfigLoader
         }
         else if (configPath.EndsWith(".ini", StringComparison.OrdinalIgnoreCase))
         {
-            builder.AddIniFile(Path.GetFileName(configPath), optional: false, reloadOnChange: true);
+            builder.AddIniFile(Path.GetFileName(configPath), optional: false, reloadOnChange: false);
             Log.Debug("INI-Konfigurationsprovider konfiguriert für {Path}", configPath);
-            
+
             // Separate Konfiguration nur für die Datei
             var fileBuilder = new ConfigurationBuilder()
                 .SetBasePath(Path.GetDirectoryName(configPath)!)
@@ -59,7 +59,7 @@ public class ConfigLoader
         {
             throw new ArgumentException("Nur .ini oder .json werden unterstützt.");
         }
-        
+
         // Speichere alle Werte aus der Konfigurationsdatei im ConfigSources-Dictionary
         foreach (var section in fileConfig.GetChildren())
         {
@@ -68,44 +68,44 @@ public class ConfigLoader
                 ConfigSources[item.Key] = SourceFile;
             }
         }
-        
+
         // Umgebungsvariablen mit Prefix hinzufügen (höhere Priorität als Konfigurationsdatei)
         builder.AddEnvironmentVariables("HASHBACKUP_");
         Log.Debug("Umgebungsvariablen mit Prefix 'HASHBACKUP_' zur Konfiguration hinzugefügt");
-        
+
         // Separate Konfiguration für Umgebungsvariablen
         var envBuilder = new ConfigurationBuilder().AddEnvironmentVariables("HASHBACKUP_");
         var envConfig = envBuilder.Build();
-        
+
         // Speichere Umgebungsvariablen im ConfigSources-Dictionary
         foreach (var item in envConfig.AsEnumerable().Where(x => x.Value != null))
         {
             ConfigSources[item.Key] = SourceEnv;
         }
-        
+
         // Kommandozeilenargumente hinzufügen (höchste Priorität)
         if (args.Length > 0)
         {
             // Verarbeite Flag-Parameter speziell, die ohne Wert angegeben werden können
             var processedArgs = PreprocessCommandLineArgs(args);
-            
+
             builder.AddCommandLine(processedArgs, GetCommandLineMapping());
             Log.Debug("Kommandozeilenargumente zur Konfiguration hinzugefügt");
-            
+
             // Separate Konfiguration für Kommandozeilenargumente
             var cmdBuilder = new ConfigurationBuilder().AddCommandLine(processedArgs, GetCommandLineMapping());
             var cmdConfig = cmdBuilder.Build();
-            
+
             // Speichere Kommandozeilenargumente im ConfigSources-Dictionary
             foreach (var item in cmdConfig.AsEnumerable().Where(x => x.Value != null))
             {
                 ConfigSources[item.Key] = SourceCmdline;
             }
         }
-            
+
         // Konfiguration bauen
         Configuration = builder.Build();
-        
+
         Log.Information("Konfiguration erfolgreich geladen");
     }
 
@@ -152,13 +152,18 @@ public class ConfigLoader
         // Bei INI-Dateien werden Sektionen verwendet, bei JSON könnte die Hierarchie durch ":" getrennt sein
         var configKey = section + ":" + key;
         var value = Configuration[configKey];
-            
+
         if (value != null)
         {
-            Log.Debug("Konfigurationswert gefunden: {Section}:{Key}={Value}", section, key, value);
+            // Sensitive keys are redacted before their value reaches Serilog. The Azure key
+            // is read before the backend can register it with the generic secret masker.
+            var loggedValue = IsSensitiveKey(key)
+                ? "***SECRET***"
+                : SensitiveDataManager.MaskSensitiveData(value);
+            Log.Debug("Konfigurationswert gefunden: {Section}:{Key}={Value}", section, key, loggedValue);
             return value;
         }
-            
+
         if (defaultValue != null)
         {
             Log.Debug("Konfigurationswert nicht gefunden: {Section}:{Key}, verwende Standardwert: {DefaultValue}", section, key, defaultValue);
@@ -167,10 +172,10 @@ public class ConfigLoader
         }
         else
             Log.Warning("Konfigurationswert nicht gefunden: {Section}:{Key}, kein Standardwert", section, key);
-            
+
         return defaultValue;
     }
-    
+
     /// <summary>
     /// Gibt die Quelle eines Konfigurationswerts zurück
     /// </summary>
@@ -179,7 +184,7 @@ public class ConfigLoader
         var configKey = section + ":" + key;
         return ConfigSources.GetValueOrDefault(configKey, SourceDefault);
     }
-    
+
     /// <summary>
     /// Generiert eine Dokumentation der aktuellen Konfiguration mit Angabe der Quellen
     /// </summary>
@@ -202,24 +207,24 @@ public class ConfigLoader
             {
                 var key = item.Key.Replace(section + ":", "");
                 if (string.IsNullOrEmpty(key)) continue;
-                
+
                 var value = item.Value!;
-                
+
                 // Sensible Werte maskieren (z.B. API-Keys, Tokens, Passwörter)
                 // Wert durch Platzhalter ersetzen
                 value = IsSensitiveKey(key) ? "***SECRET***" :
                     // Maskiere trotzdem sensible Daten, die vielleicht im Wert enthalten sind
                     SensitiveDataManager.MaskSensitiveData(value);
-                
+
                 var source = GetConfigSource(section, key);
                 result.Add($"{key}={value} ({source})");
             }
             result.Add("");
         }
-        
+
         return result;
     }
-    
+
     /// <summary>
     /// Prüft, ob ein Konfigurationsschlüssel sensible Daten enthält und maskiert werden sollte
     /// </summary>
@@ -233,20 +238,23 @@ public class ConfigLoader
             "password",
             "token",
             "credential",
-            "apikey"
+            "apikey",
+            "connection",
+            "sas",
+            "signature"
         };
-        
-        return sensitiveKeyPatterns.Any(pattern => 
+
+        return sensitiveKeyPatterns.Any(pattern =>
             key.Contains(pattern, StringComparison.OrdinalIgnoreCase));
     }
-    
+
     private List<string> GetAllSections()
     {
         // Alle Kind-Sektionen der Root-Ebene ermitteln
 
         return Configuration.GetChildren().Select(section => section.Key).ToList();
     }
-    
+
     /// <summary>
     /// Verarbeitet Kommandozeilenargumente vor, um Parameter ohne Wert zu unterstützen
     /// </summary>
@@ -256,7 +264,7 @@ public class ConfigLoader
     {
         var result = new List<string>();
         var flagParameters = new[] { "--safe-mode", "-sm", "--dry-run", "-d" };
-        
+
         for (var i = 0; i < args.Length; i++)
         {
             // Prüfen, ob es sich um einen Flag-Parameter handelt
@@ -264,18 +272,18 @@ public class ConfigLoader
             {
                 // Wenn das nächste Argument ein neuer Parameter ist oder wir am Ende sind,
                 // fügen wir den Flag-Parameter mit dem Wert "true" hinzu
-                if (i == args.Length - 1 || args[i+1].StartsWith('-'))
+                if (i == args.Length - 1 || args[i + 1].StartsWith('-'))
                 {
                     result.Add(args[i]);
                     result.Add("true");
                     continue; // Wir haben den Parameter bereits hinzugefügt
                 }
             }
-            
+
             // Normaler Parameter, unverändert hinzufügen
             result.Add(args[i]);
         }
-        
+
         return result.ToArray();
     }
 }

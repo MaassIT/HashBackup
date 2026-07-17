@@ -1,50 +1,52 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Farben für die Ausgabe
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+# Build HashBackup for the local macOS host and for the x64 Linux NAS deployment.
+# All final binaries are deliberately placed in ./builds.
 
-echo -e "${YELLOW}HashBackup Build-Skript${NC}"
-echo "------------------------------"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly BUILD_DIR="${SCRIPT_DIR}/builds"
+readonly PROJECT_FILE="HashBackup/HashBackup.csproj"
+readonly TARGET_FRAMEWORK="net10.0"
+readonly CONTAINER_NAME="hashbackup-linux-build-$$"
 
-# Verzeichnis zum Speichern der Builds
-BUILD_DIR="builds"
-mkdir -p $BUILD_DIR
+cleanup() {
+    docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
-# 1. macOS Version kompilieren
-echo -e "${GREEN}Kompiliere macOS Version...${NC}"
-dotnet publish HashBackup/HashBackup.csproj \
+case "$(uname -m)" in
+    arm64) readonly MACOS_RID="osx-arm64" ;;
+    x86_64) readonly MACOS_RID="osx-x64" ;;
+    *) echo "Nicht unterstützte macOS-Architektur: $(uname -m)" >&2; exit 1 ;;
+esac
+
+cd "${SCRIPT_DIR}"
+mkdir -p "${BUILD_DIR}"
+
+printf 'HashBackup-Build (%s)\n' "${MACOS_RID}"
+printf '%s\n' '------------------------------'
+
+printf '%s\n' 'Kompiliere macOS-Version...'
+dotnet publish "${PROJECT_FILE}" \
     -c Release \
-    -r osx-x64 \
+    -r "${MACOS_RID}" \
     --self-contained true \
+    /p:PublishAot=false \
     /p:PublishTrimmed=true \
     /p:PublishReadyToRun=true \
     /p:PublishSingleFile=true
 
-# Kompilat in den Build-Ordner kopieren
-echo "Kopiere macOS-Kompilat in $BUILD_DIR..."
-cp -f HashBackup/bin/Release/net9.0/osx-x64/publish/HashBackup $BUILD_DIR/HashBackup-macos
+cp -f "HashBackup/bin/Release/${TARGET_FRAMEWORK}/${MACOS_RID}/publish/HashBackup" \
+    "${BUILD_DIR}/HashBackup-macos"
 
-# 2. Linux Version mit Docker kompilieren
-echo -e "${GREEN}Kompiliere Linux Version mit Docker...${NC}"
-
-# Docker-Image bauen
+printf '%s\n' 'Kompiliere Linux-x64-NativeAOT-Version mit Docker...'
 docker build --platform linux/amd64 -t hashbackup-linux-build .
+docker create --platform linux/amd64 --name "${CONTAINER_NAME}" hashbackup-linux-build echo >/dev/null
+docker cp "${CONTAINER_NAME}:/app/publish/HashBackup" "${BUILD_DIR}/HashBackup-linux"
 
-# Binary aus dem Container extrahieren
-echo "Extrahiere Linux-Kompilat aus Docker-Container..."
-# Ein Kommando muss beim Erstellen des Containers angegeben werden (hier: echo als Dummy-Befehl)
-docker create --name temp-hashbackup-container hashbackup-linux-build echo
-docker cp temp-hashbackup-container:/app/publish/HashBackup $BUILD_DIR/HashBackup-linux
-docker rm temp-hashbackup-container
+chmod +x "${BUILD_DIR}/HashBackup-macos" "${BUILD_DIR}/HashBackup-linux"
 
-# Berechtigungen setzen
-chmod +x $BUILD_DIR/HashBackup-macos
-chmod +x $BUILD_DIR/HashBackup-linux
-
-echo -e "${GREEN}Build abgeschlossen!${NC}"
-echo "Kompilierte Binärdateien finden Sie im Verzeichnis '$BUILD_DIR':"
-echo "  - $BUILD_DIR/HashBackup-macos (macOS x64)"
-echo "  - $BUILD_DIR/HashBackup-linux (Linux x64)"
+printf '%s\n' 'Build abgeschlossen:'
+printf '  %s (macOS %s)\n' "${BUILD_DIR}/HashBackup-macos" "${MACOS_RID}"
+printf '  %s (Linux x64)\n' "${BUILD_DIR}/HashBackup-linux"

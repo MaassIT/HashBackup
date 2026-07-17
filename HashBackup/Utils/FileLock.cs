@@ -8,7 +8,7 @@ public class FileLock : IDisposable
 {
     private FileStream? _lockFileStream;
     private readonly string _lockFilePath;
-    
+
     /// <summary>
     /// Erstellt eine neue Instanz des FileLock.
     /// </summary>
@@ -17,7 +17,7 @@ public class FileLock : IDisposable
     {
         _lockFilePath = lockFilePath;
     }
-    
+
     /// <summary>
     /// Versucht, den Lock zu erwerben.
     /// </summary>
@@ -32,7 +32,7 @@ public class FileLock : IDisposable
             {
                 Directory.CreateDirectory(directory);
             }
-            
+
             // Versuche die Datei exklusiv zu öffnen
             _lockFileStream = new FileStream(
                 _lockFilePath,
@@ -40,7 +40,7 @@ public class FileLock : IDisposable
                 FileAccess.ReadWrite,
                 FileShare.None
             );
-            
+
             // Schreibe PID und Zeitstempel in die Lockdatei
             var processId = Environment.ProcessId;
             var timestamp = DateTime.Now;
@@ -48,7 +48,7 @@ public class FileLock : IDisposable
             var bytes = System.Text.Encoding.UTF8.GetBytes(info);
             _lockFileStream.Write(bytes, 0, bytes.Length);
             _lockFileStream.Flush();
-            
+
             return true;
         }
         catch (IOException)
@@ -58,7 +58,7 @@ public class FileLock : IDisposable
             return false;
         }
     }
-    
+
     /// <summary>
     /// Gibt den Lock frei und löscht die Lockdatei.
     /// </summary>
@@ -67,7 +67,7 @@ public class FileLock : IDisposable
         _lockFileStream?.Close();
         _lockFileStream?.Dispose();
         _lockFileStream = null;
-        
+
         try
         {
             if (File.Exists(_lockFilePath))
@@ -80,7 +80,7 @@ public class FileLock : IDisposable
             Log.Warning(ex, "Fehler beim Löschen der Lockdatei {LockFilePath}", _lockFilePath);
         }
     }
-    
+
     /// <summary>
     /// Gibt den Lock und zugehörige Ressourcen frei.
     /// </summary>

@@ -11,6 +11,7 @@
 - 🔌 **Modular erweiterbar** (Storage-Backend-Architektur)
 - 🔄 **Wiederaufnahme von fehlgeschlagenen Uploads** mit automatischem Retry
 - 🛠️ **Plattformübergreifend** (Linux/macOS: xattr, Windows: NTFS ADS)
+- 🍎 **macOS-kompatible Git-Sicherung** mit xattrs auf 0444-Objekten bei unverändert wiederhergestellten Dateirechten
 - 🖥️ **Parallele Uploads** für hohe Performance
 - 🔒 **Locking-Mechanismus**, um parallele Backups zu verhindern
 - 📝 **Backup-Metadaten als CSV**
@@ -18,13 +19,20 @@
 - 🚫 **Flexible Ignore-Patterns** für Dateien und Verzeichnisse (ähnlich .gitignore)
 - 📁 **Unterstützung mehrerer Quellverzeichnisse** für kombinierte Backups
 - 🔄 **Zuverlässige Wiederholungslogik** bei Netzwerkproblemen
+- 🧾 **Korrekte CSV-Metadaten** auch bei Kommas, Anführungszeichen und Zeilenumbrüchen in Dateinamen
+- 0️⃣ **Sicherung leerer Dateien**, damit Marker- und Platzhalterdateien nicht verloren gehen
+- 🛡️ **Integritätsprüfung bei veränderlichen Quellen** ohne falschen Sicherungszeitstempel
+- 🧪 **Dry-Run ohne Änderungen an Quell- oder Zieldaten** für sichere Produktionsprüfungen
+- 🔎 **Verify-Befehl** für schnelle Storage-Metadatenprüfung oder vollständigen Downloadtest
+- ♻️ **Sicherer Restore** mit atomaren Dateien, MD5-Prüfung und Symlink-Schutz
+- 🧊 **Archive-Rehydration** mit expliziter Kostenfreigabe, Statuscode und Wiederaufnahme
 
 ## 🏗️ Installation
 
-1. **.NET 9 SDK installieren** ([Download](https://dotnet.microsoft.com/download))
+1. **.NET 10 LTS SDK installieren** ([Download](https://dotnet.microsoft.com/download/dotnet/10.0))
 2. Repository klonen:
    ```bash
-   git clone https://github.com/deinuser/HashBackup.git
+   git clone https://github.com/MaassIT/HashBackup.git
    cd HashBackup
    ```
 3. Abhängigkeiten installieren:
@@ -36,11 +44,31 @@
    dotnet build
    ```
 
+Für die fertigen lokalen macOS- und Linux-x64-Binärdateien:
+
+```bash
+./build.sh
+```
+
+Die Artefakte landen anschließend unter `builds/HashBackup-macos` und
+`builds/HashBackup-linux`.
+
 ## 📜 Verwendung
 
 ```bash
 dotnet run --project HashBackup/HashBackup.csproj /pfad/zur/backup_config.ini
 ```
+
+Die alte Syntax bleibt ein normaler Backup-Aufruf. Alternativ kann der Befehl
+explizit angegeben werden:
+
+```bash
+HashBackup backup /pfad/zur/backup_config.ini -sm
+```
+
+Die Hilfe ist ohne Konfigurationsdatei über mehrere gebräuchliche Varianten
+erreichbar: `HashBackup --help`, `HashBackup -h`, `HashBackup -?`,
+`HashBackup /?` oder `HashBackup help`.
 
 Oder mit JSON-Konfiguration:
 
@@ -68,8 +96,8 @@ RETRY_DELAY = 5
 
 [AZURE]
 STORAGE_ACCOUNT = meinaccount
-STORAGE_KEY = geheim
 CONTAINER = mein-container
+STORAGE_TIER = Archive
 ```
 
 ### Beispiel-Konfigurationsdatei (JSON)
@@ -78,7 +106,7 @@ CONTAINER = mein-container
 {
   "DEFAULT": {
     "BACKUP_TYPE": "azure",
-    "SOURCE_FOLDER": ["/daten", "/weitere-daten", "/noch-mehr-daten"],
+    "SOURCE_FOLDER": "/daten,/weitere-daten,/noch-mehr-daten",
     "BACKUP_METADATA_FILE": "/backup/metadata.csv",
     "SAFE_MODE": "true",
     "DRY_RUN": "false",
@@ -93,11 +121,158 @@ CONTAINER = mein-container
   },
   "AZURE": {
     "STORAGE_ACCOUNT": "meinaccount",
-    "STORAGE_KEY": "geheim",
-    "CONTAINER": "mein-container"
+    "CONTAINER": "mein-container",
+    "STORAGE_TIER": "Archive"
   }
 }
 ```
+
+### Secrets sicher übergeben
+
+Azure-Schlüssel sollten nicht in einer versionierten INI-/JSON-Datei stehen. HashBackup
+unterstützt weiterhin die bisherigen Konfigurationsdateien, bevorzugt für Secrets aber
+die bereits kompatible Umgebungsvariable:
+
+```bash
+export HASHBACKUP_AZURE__STORAGE_KEY='<Azure-Storage-Key>'
+HashBackup /pfad/zur/backup_config.ini
+```
+
+Die Umgebungsvariable überschreibt den Wert aus der Konfigurationsdatei. Sie darf nicht
+in Shell-History, Logs oder Repository-Dateien gespeichert werden.
+
+### Zuverlässigkeits- und Kompatibilitätshinweise
+
+- Bestehende CLI-Parameter und Konfigurationsschlüssel bleiben unterstützt.
+- `MAX_RETRIES` bleibt kompatibel und bezeichnet zusätzliche Wiederholungen nach dem
+  ersten Upload-Versuch.
+- Ändert sich eine Datei während oder direkt nach dem Upload, wird die neuere Version
+  nicht fälschlich als gesichert markiert. Der Lauf endet unvollständig und der nächste
+  Lauf bewertet die Datei erneut.
+- Ein fehlgeschlagener Metadaten-Upload lässt den gesamten Lauf mit einem Exitcode
+  ungleich null fehlschlagen, weil die Metadaten für eine Wiederherstellung erforderlich
+  sind.
+- `RETENTION_DAYS` wird vom Programm derzeit nicht aktiv umgesetzt. Aufbewahrung und
+  Löschung müssen als Azure-Lifecycle-Regel konfiguriert werden.
+
+## 🔎 Backup prüfen
+
+Ohne `--deep` prüft HashBackup alle referenzierten Objekte anhand von Existenz,
+Dateigröße und dem vom Storage gelieferten Content-MD5. Diese Prüfung funktioniert
+auch für Azure-Blobs im Archive-Tier, weil deren Eigenschaften weiterhin online
+lesbar sind:
+
+```bash
+HashBackup verify /pfad/zur/backup_config.ini --metadata latest
+```
+
+Bei älteren Blobs kann das Storage-Content-MD5 fehlen. HashBackup wertet eine
+erfolgreiche Existenz- und Größenprüfung dann nicht als Schaden, weist diese Objekte
+aber gesammelt als **nur strukturell geprüft** aus. Der Befehl bleibt erfolgreich;
+erst `--deep` bestätigt den Inhalt dieser Objekte durch einen eigenen MD5-Lauf.
+Dadurch bleiben flache Prüfungen auch für Archive ohne kostenpflichtige Rehydration
+nutzbar, ohne einen kryptografischen Nachweis vorzutäuschen.
+
+Wenn die ursprünglichen Quelldateien noch vorhanden sind, kann HashBackup deren
+Inhalt stattdessen lokal neu hashen. Der folgende Befehl prüft ausschließlich
+Legacy-Objekte ohne Storage-Content-MD5, lädt keine Archive-Daten herunter und
+fordert keine Rehydration an:
+
+```bash
+HashBackup verify /pfad/zur/backup_config.ini \
+  --metadata latest \
+  --verify-source \
+  --only-missing-content-md5 \
+  --report /sicherer/pfad/hashbackup-source-verify.csv
+```
+
+Der atomar geschriebene CSV-Bericht enthält für jeden betroffenen Eintrag das
+Ergebnis. Auf Unix wird die Berichtsdatei mit Modus `0600` angelegt. Die lokale
+Prüfung validiert Dateigröße und einen neu berechneten MD5 gegen den Katalog-Hash
+und erfasst im selben Lesevorgang zusätzlich einen SHA-256 als stärkeren zukünftigen
+Nachweis. Sie schreibt weder xattrs noch Quelldateien und folgt keinen Symlinks
+unterhalb der konfigurierten Quellwurzel. `--verify-source` ist absichtlich nicht
+mit `--deep` oder `--rehydrate` kombinierbar.
+
+Dieser Nachweis bestätigt die lokale Quelle und zusammen mit Existenz und Größe die
+korrekte Zuordnung des content-adressierten Archive-Objekts. Die Nutzdaten im
+Archive selbst bleiben dabei ausdrücklich unbewiesen: Der Modus ersetzt keinen
+Byte-für-Byte-Download des Archive-Objekts. Ein fehlendes Storage-Content-MD5 wird
+daher nicht nachträglich nur aus dem Dateinamen gesetzt, weil dies einen nicht
+erbrachten serverseitigen Inhaltsnachweis vortäuschen würde.
+
+Eine vollständige Prüfung lädt jedes Objekt herunter und berechnet den MD5 erneut:
+
+```bash
+HashBackup verify /pfad/zur/backup_config.ini --metadata latest --deep
+```
+
+Sind dafür benötigte Daten archiviert, endet der Befehl mit Exitcode `2`, ohne
+automatisch Kosten auszulösen. Die Rehydration muss ausdrücklich angefordert werden:
+
+```bash
+HashBackup verify /pfad/zur/backup_config.ini \
+  --metadata latest \
+  --deep \
+  --rehydrate \
+  --rehydrate-tier cool \
+  --rehydrate-priority standard
+```
+
+## ♻️ Backup wiederherstellen
+
+```bash
+HashBackup restore /pfad/zur/backup_config.ini \
+  --metadata latest \
+  --destination /pfad/zum/restore
+```
+
+Vor dem ersten Download prüft HashBackup **alle** benötigten Objekte. Wenn Archive-
+Blobs enthalten sind, wird kein Teil-Restore angelegt. Mit `--rehydrate` werden die
+fehlenden Online-Kopien angefordert und der Prozess endet mit Exitcode `2`:
+
+```bash
+HashBackup restore /pfad/zur/backup_config.ini \
+  --metadata latest \
+  --destination /pfad/zum/restore \
+  --rehydrate \
+  --rehydrate-tier cool \
+  --rehydrate-priority standard
+```
+
+Azure-Archive-Rehydration kann mit Standardpriorität mehrere Stunden dauern. Danach
+wird derselbe Restore-Befehl erneut ausgeführt. `high` kann schneller sein, verursacht
+aber höhere Kosten. Eine bereits laufende Standard-Rehydration kann auf `high`
+hochgestuft, jedoch nicht wieder zurückgestuft werden.
+
+Restore-Dateien werden zunächst unter einem zufälligen temporären Namen geladen,
+anschließend auf Größe und MD5 geprüft und erst danach atomar veröffentlicht.
+Vorhandene korrekte Dateien werden übernommen; abweichende Dateien erfordern
+`--overwrite`. Bei einer Quelle wird deren Inhalt direkt im Restore-Ziel abgelegt. Bei
+mehreren `SOURCE_FOLDERS` erhält jede Quelle ein eigenes `source-N-...`-Unterverzeichnis.
+Das Restore-Ziel selbst darf kein Symlink sein und wird auf Unix-Systemen bei einer
+Neuanlage zunächst nur für den aktuellen Benutzer zugänglich gemacht. Ein Restore ist
+pro Datei atomar und wiederaufnehmbar: Wenn ein späterer Download fehlschlägt, bleiben
+bereits verifizierte Dateien erhalten und werden beim nächsten Lauf übersprungen. Eine
+globale Transaktion bzw. ein Rollback über den gesamten Datenbestand findet bewusst
+nicht statt, da dies bei sehr großen Backups den doppelten Speicherplatz erfordern würde.
+
+Rehydrationsanforderungen für große Archive werden in Azure-Batches von maximal 256
+Objekten gesendet. Dadurch bleiben auch umfangreiche Restore-Vorprüfungen praktikabel.
+
+`--metadata` akzeptiert:
+
+- `latest` (Standard): neueste Metadatendatei für `JOB_NAME` im Storage
+- einen Blob-/Objektpfad wie `metadata/Job/2026/07/backup_....csv`
+- den Pfad zu einer bereits lokal vorhandenen Metadaten-CSV
+
+### Exitcodes
+
+| Exitcode | Bedeutung |
+|----------|-----------|
+| `0` | Befehl erfolgreich abgeschlossen |
+| `1` | Konfigurations-, Integritäts-, Download- oder Restore-Fehler |
+| `2` | Archive-Rehydration erforderlich oder noch nicht abgeschlossen |
 
 ### Ignorierte Dateien und Verzeichnisse konfigurieren
 
@@ -154,6 +329,9 @@ HashBackup ist modular aufgebaut und besteht aus folgenden Hauptkomponenten:
 
 ```bash
 HashBackup <config-file> [optionen]
+HashBackup backup <config-file> [optionen]
+HashBackup verify <config-file> [optionen]
+HashBackup restore <config-file> --destination <pfad> [optionen]
 ```
 
 | Parameter | Beschreibung |
@@ -164,12 +342,30 @@ HashBackup <config-file> [optionen]
 | `-m`, `--metadata` | Pfad zur Metadaten-Datei |
 | `-p`, `--parallel` | Anzahl paralleler Uploads |
 | `-sm`, `--safe-mode` | Safe-Mode aktivieren |
-| `-d`, `--dry-run` | Dry-Run ohne tatsächliche Änderungen |
+| `-d`, `--dry-run` | Dry-Run ohne Änderungen an Quell- oder Zieldaten |
 | `-i`, `--ignore` | Zu ignorierende Dateien/Verzeichnisse |
 | `-if`, `--ignore-file` | Pfad zu einer Datei mit Ignorier-Mustern |
 | `-ll`, `--log-level` | Log-Level (Verbose, Debug, Information, Warning, Error, Fatal) |
 | `-r`, `--retries` | Maximale Anzahl an Wiederholungen |
 | `-rd`, `--retry-delay` | Verzögerung in Sekunden zwischen Wiederholungen |
+| `-m`, `--metadata` | Bei Verify/Restore: lokale CSV, Objektpfad oder `latest` |
+| `-o`, `--destination` | Zielverzeichnis für Restore |
+| `--deep` | Vollständiger Verify per Download und MD5 |
+| `--rehydrate` | Archive-Rehydration ausdrücklich anfordern |
+| `--rehydrate-tier` | Online-Ziel: `hot`, `cool` oder `cold` |
+| `--rehydrate-priority` | `standard` oder `high` |
+| `--overwrite` | Abweichende vorhandene Restore-Dateien ersetzen |
+
+## ✅ Continuous Integration
+
+GitHub Actions prüft bei Pull Requests und Branch-Pushes:
+
+- reproduzierbare Wiederherstellung mit .NET 10
+- `dotnet format --verify-no-changes`
+- warnungsfreien Release-Build
+- vollständige Testsuite
+- NuGet-Audit direkter und transitiver Abhängigkeiten
+- Linux-x64-NativeAOT-Publish als 14 Tage verfügbares Workflow-Artefakt
 
 ## 🏗️ Geplante Features
 

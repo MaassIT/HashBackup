@@ -10,7 +10,7 @@ public class IgnorePatternMatcher
 {
     private readonly List<Regex> _regexPatterns = [];
     private readonly List<string> _exactMatches = [];
-    
+
     /// <summary>
     /// Initialisiert eine neue Instanz der IgnorePatternMatcher-Klasse
     /// </summary>
@@ -18,19 +18,19 @@ public class IgnorePatternMatcher
     public IgnorePatternMatcher(IEnumerable<string>? patterns)
     {
         if (patterns == null) return;
-        
+
         foreach (var pattern in patterns)
         {
             if (string.IsNullOrWhiteSpace(pattern))
                 continue;
-                
+
             if (pattern.Contains('*') || pattern.Contains('?'))
             {
                 // Konvertiere Glob-Pattern in regex
                 var regexPattern = "^" + Regex.Escape(pattern)
                     .Replace("\\*", ".*")
                     .Replace("\\?", ".") + "$";
-                    
+
                 _regexPatterns.Add(new Regex(regexPattern, RegexOptions.IgnoreCase));
             }
             else
@@ -39,11 +39,11 @@ public class IgnorePatternMatcher
                 _exactMatches.Add(pattern);
             }
         }
-        
-        Log.Debug("Ignore-Pattern-Matcher initialisiert mit {ExactCount} exakten Mustern und {RegexCount} Regex-Mustern", 
+
+        Log.Debug("Ignore-Pattern-Matcher initialisiert mit {ExactCount} exakten Mustern und {RegexCount} Regex-Mustern",
             _exactMatches.Count, _regexPatterns.Count);
     }
-    
+
     /// <summary>
     /// Prüft, ob ein Dateiname oder Pfad ignoriert werden soll
     /// </summary>
@@ -54,16 +54,16 @@ public class IgnorePatternMatcher
     {
         if (string.IsNullOrWhiteSpace(path))
             return false;
-            
+
         var fileName = checkFullPath ? path : Path.GetFileName(path);
-        
+
         // Prüfe zuerst exakte Übereinstimmungen (effizienter)
         if (_exactMatches.Contains(fileName, StringComparer.OrdinalIgnoreCase))
         {
             Log.Debug("Datei {Path} wird aufgrund eines exakten Musters ignoriert", path);
             return true;
         }
-        
+
         // Prüfe dann Regex-Muster
         if (!_regexPatterns.Any(regex => regex.IsMatch(fileName))) return false;
         Log.Debug("Datei {Path} wird aufgrund eines Regex-Musters ignoriert", path);

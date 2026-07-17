@@ -1,66 +1,410 @@
 namespace HashBackup.Storage;
 
-public class LocalStorageBackend(string path) : IStorageBackend
+/// <summary>
+/// Speichert Content-adressierte Dateien in einem lokalen Zielverzeichnis.
+/// </summary>
+public sealed class LocalStorageBackend : IStorageBackend, IReadableStorageBackend
 {
-    private const string AttrNameMd5HashValue = "user.md5_hash_value";
+    private readonly string _destinationRoot;
 
-    /// <summary>
-    /// Registriert sensible Daten dieses Backends, die in Logs und Ausgaben maskiert werden sollen
-    /// </summary>
+    public LocalStorageBackend(string path)
+    {
+        _destinationRoot = Path.GetFullPath(path);
+    }
+
     public void RegisterSensitiveData()
     {
-        // Bei LocalStorageBackend gibt es keine sensitiven Daten zum Registrieren
         Log.Debug("Lokales Storage Backend: Keine sensiblen Daten zu registrieren");
     }
 
     public async Task<Dictionary<string, long>> FetchHashesAsync(CancellationToken ct = default)
     {
-        var hashes = new Dictionary<string, long>();
-        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-        {
-            // Hash aus Dateinamen extrahieren (ohne Extension)
-            var fileName = Path.GetFileNameWithoutExtension(file);
-            var size = new FileInfo(file).Length;
-            if (!string.IsNullOrEmpty(fileName) && size > 0)
-                hashes[fileName] = size;
-        }
-        return await Task.FromResult(hashes);
-    }
+        var hashes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
 
-    public async Task<bool> UploadToDestinationAsync(string filePath, string destinationPath, string fileHash, bool isImportant = false, CancellationToken ct = default)
-    {
-        var localDest = Path.Combine(path, destinationPath);
-        Directory.CreateDirectory(Path.GetDirectoryName(localDest)!);
-        var alreadyExisted = File.Exists(localDest);
-        if (!alreadyExisted)
+        if (!Directory.Exists(_destinationRoot))
         {
+            return hashes;
+        }
+
+        var enumerationOptions = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
+
+        foreach (var file in Directory.EnumerateFiles(_destinationRoot, "*", enumerationOptions))
+        {
+            ct.ThrowIfCancellationRequested();
+            var fileName = Path.GetFileNameWithoutExtension(file);
+
+            if (!ContentHashValidator.IsMd5Hash(fileName))
+            {
+                continue;
+            }
+
             try
             {
-                File.Copy(filePath, localDest, overwrite: false);
-                
-                // Für lokale Speicherung hat isImportant keine Auswirkung, aber wir können es für Debugging-Zwecke loggen
-                if (isImportant)
+                var actualHash = await CalculateMd5Async(file, ct);
+                if (!string.Equals(actualHash, fileName, StringComparison.OrdinalIgnoreCase))
                 {
-                    Log.Debug("Wichtige Datei lokal gespeichert: {LocalDest}", localDest);
+                    Log.Error(
+                        "Lokales Backup ist beschädigt und wird im Safe-Mode nicht als vorhanden gewertet: {FilePath}",
+                        file);
+                    continue;
                 }
-                else
-                {
-                    Log.Debug("Lokal gespeichert: {LocalDest}", localDest);
-                }
+
+                hashes[fileName] = new FileInfo(file).Length;
             }
-            catch (IOException ex) when ((ex.HResult & 0xFFFF) == 0x50) // ERROR_FILE_EXISTS
+            catch (OperationCanceledException)
             {
-                Log.Information("{LocalDest} existiert bereits (catch). Skipping", localDest);
+                throw;
             }
             catch (Exception ex)
             {
-                Log.Error("Fehler beim lokalen Kopieren von {FilePath} nach {LocalDest}: {ExMessage}", filePath, localDest, ex.Message);
-                return await Task.FromResult(false);
+                Log.Warning(ex, "Lokales Backup konnte im Safe-Mode nicht verifiziert werden: {FilePath}", file);
             }
         }
-        // Attribut im Ziel ist nicht nötig, aber im Quellfile für Backup-Status
-        FileAttributesUtil.SetAttribute(filePath, AttrNameMd5HashValue, fileHash);
-        FileAttributesUtil.SetAttribute(filePath, $"user.backup_mtime", new FileInfo(filePath).LastWriteTimeUtc.ToFileTimeUtc().ToString());
-        return await Task.FromResult(true);
+
+        return hashes;
+    }
+
+    public async Task<UploadResult> UploadToDestinationAsync(
+        string filePath,
+        string destinationPath,
+        string fileHash,
+        bool isImportant = false,
+        CancellationToken ct = default)
+    {
+        if (!ContentHashValidator.IsMd5Hash(fileHash))
+        {
+            Log.Error("Ungültiger Content-MD5 für {FilePath}; lokale Sicherung wird nicht ausgeführt", filePath);
+            return UploadResult.Failed;
+        }
+
+        string? temporaryDestination = null;
+
+        try
+        {
+            var localDestination = ResolveDestinationPath(destinationPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(localDestination)!);
+
+            if (File.Exists(localDestination))
+            {
+                return await VerifyExistingDestinationAsync(localDestination, fileHash, ct);
+            }
+
+            // Copy into the destination directory and publish atomically. A process crash or
+            // source mutation must never leave a partial file at the content-addressed path.
+            temporaryDestination = $"{localDestination}.tmp-{Guid.NewGuid():N}";
+            await using (var sourceStream = new FileStream(
+                filePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 1024 * 1024,
+                useAsync: true))
+            await using (var destinationStream = new FileStream(
+                temporaryDestination,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 1024 * 1024,
+                useAsync: true))
+            {
+                await sourceStream.CopyToAsync(destinationStream, ct);
+                await destinationStream.FlushAsync(ct);
+            }
+
+            var copiedHash = await CalculateMd5Async(temporaryDestination, ct);
+            if (!string.Equals(copiedHash, fileHash, StringComparison.OrdinalIgnoreCase))
+            {
+                var currentSourceHash = await CalculateMd5Async(filePath, ct);
+                if (!string.Equals(currentSourceHash, fileHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    Log.Warning(
+                        "Quelle wurde während der lokalen Sicherung geändert: {FilePath}",
+                        filePath);
+                    return UploadResult.SourceChanged;
+                }
+
+                Log.Error(
+                    "Integritätsprüfung der lokalen Kopie fehlgeschlagen: {LocalDest}",
+                    localDestination);
+                return UploadResult.Failed;
+            }
+
+            File.Move(temporaryDestination, localDestination, overwrite: false);
+            temporaryDestination = null;
+
+            Log.Debug(
+                isImportant ? "Wichtige Datei lokal gespeichert: {LocalDest}" : "Lokal gespeichert: {LocalDest}",
+                localDestination);
+            return await Task.FromResult(UploadResult.Successful);
+        }
+        catch (ArgumentException ex)
+        {
+            Log.Warning(ex, "Unsicherer lokaler Zielpfad wurde abgelehnt: {DestinationPath}", destinationPath);
+            return UploadResult.Failed;
+        }
+        catch (IOException ex) when ((ex.HResult & 0xFFFF) == 0x50)
+        {
+            // A concurrent worker/process may have published the same content after our
+            // initial existence check. Accept it only after validating its bytes.
+            var localDestination = ResolveDestinationPath(destinationPath);
+            return await VerifyExistingDestinationAsync(localDestination, fileHash, ct);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Fehler beim lokalen Kopieren von {FilePath} nach {DestinationPath}", filePath, destinationPath);
+            return UploadResult.Failed;
+        }
+        finally
+        {
+            if (temporaryDestination != null)
+            {
+                try
+                {
+                    File.Delete(temporaryDestination);
+                }
+                catch (Exception cleanupException)
+                {
+                    Log.Warning(cleanupException, "Temporäre lokale Sicherungsdatei konnte nicht entfernt werden: {TemporaryDestination}", temporaryDestination);
+                }
+            }
+        }
+    }
+
+    public Task<string?> FindLatestMetadataAsync(string jobName, CancellationToken ct = default)
+    {
+        var metadataDirectory = ResolveDestinationPath($"metadata/{jobName}");
+        if (!Directory.Exists(metadataDirectory))
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
+        var latest = Directory
+            .EnumerateFiles(metadataDirectory, "*.csv", options)
+            .Select(file => Path.GetRelativePath(_destinationRoot, file).Replace(Path.DirectorySeparatorChar, '/'))
+            .OrderByDescending(path => path, StringComparer.Ordinal)
+            .FirstOrDefault();
+        return Task.FromResult(latest);
+    }
+
+    public async Task<StorageObjectInfo> InspectObjectAsync(
+        string objectPath,
+        CancellationToken ct = default)
+    {
+        var localPath = ResolveDestinationPath(objectPath);
+        if (!File.Exists(localPath))
+        {
+            return StorageObjectInfo.Missing(objectPath);
+        }
+
+        var fileInfo = new FileInfo(localPath);
+        var hash = await CalculateMd5Async(localPath, ct);
+        return new StorageObjectInfo(
+            objectPath,
+            StorageObjectAvailability.Online,
+            fileInfo.Length,
+            hash,
+            "Local",
+            ArchiveStatus: null);
+    }
+
+    public async Task<IReadOnlyDictionary<string, StorageObjectInfo>> IndexContentObjectsAsync(
+        IEnumerable<string> expectedHashes,
+        CancellationToken ct = default)
+    {
+        var expected = expectedHashes.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, StorageObjectInfo>(StringComparer.OrdinalIgnoreCase);
+        if (expected.Count == 0 || !Directory.Exists(_destinationRoot))
+        {
+            return result;
+        }
+
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
+
+        foreach (var file in Directory.EnumerateFiles(_destinationRoot, "*", options))
+        {
+            ct.ThrowIfCancellationRequested();
+            var hash = Path.GetFileNameWithoutExtension(file);
+            if (!expected.Contains(hash) || !ContentHashValidator.IsMd5Hash(hash))
+            {
+                continue;
+            }
+
+            try
+            {
+                var actualHash = await CalculateMd5Async(file, ct);
+                var relativePath = Path.GetRelativePath(_destinationRoot, file).Replace(Path.DirectorySeparatorChar, '/');
+                var candidate = new StorageObjectInfo(
+                    relativePath,
+                    StorageObjectAvailability.Online,
+                    new FileInfo(file).Length,
+                    actualHash,
+                    "Local",
+                    ArchiveStatus: null);
+
+                if (!result.TryGetValue(hash, out var existing) ||
+                    (!string.Equals(existing.ContentHash, hash, StringComparison.OrdinalIgnoreCase) &&
+                     string.Equals(candidate.ContentHash, hash, StringComparison.OrdinalIgnoreCase)))
+                {
+                    result[hash] = candidate;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Lokales Backup-Objekt konnte nicht indiziert werden: {FilePath}", file);
+            }
+        }
+
+        return result;
+    }
+
+    public async Task DownloadObjectAsync(
+        string objectPath,
+        string destinationPath,
+        CancellationToken ct = default)
+    {
+        var localPath = ResolveDestinationPath(objectPath);
+        await using var source = new FileStream(
+            localPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 1024 * 1024,
+            useAsync: true);
+        await using var destination = new FileStream(
+            destinationPath,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 1024 * 1024,
+            useAsync: true);
+        await source.CopyToAsync(destination, ct);
+        await destination.FlushAsync(ct);
+    }
+
+    public async Task RequestRehydrationAsync(
+        IReadOnlyCollection<StorageObjectInfo> objects,
+        OnlineAccessTier targetTier,
+        ArchiveRehydratePriority priority,
+        CancellationToken ct = default)
+    {
+        foreach (var inspection in objects)
+        {
+            if (inspection.Availability == StorageObjectAvailability.Missing)
+            {
+                throw new FileNotFoundException("Lokales Backup-Objekt nicht gefunden.", inspection.ObjectPath);
+            }
+        }
+
+        // Lokaler Speicher ist immer online; die Parameter existieren nur für den
+        // gemeinsamen Vertrag mit Azure Blob Storage.
+        await Task.CompletedTask;
+    }
+
+    private static async Task<UploadResult> VerifyExistingDestinationAsync(
+        string localDestination,
+        string expectedHash,
+        CancellationToken ct)
+    {
+        var existingHash = await CalculateMd5Async(localDestination, ct);
+        if (string.Equals(existingHash, expectedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            Log.Information("{LocalDestination} existiert bereits und wurde verifiziert", localDestination);
+            return UploadResult.Successful;
+        }
+
+        Log.Error(
+            "Vorhandenes lokales Backup ist beschädigt oder kollidiert mit dem erwarteten Hash: {LocalDestination}",
+            localDestination);
+        return UploadResult.Failed;
+    }
+
+    private static async Task<string> CalculateMd5Async(string filePath, CancellationToken ct)
+    {
+        await using var stream = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 1024 * 1024,
+            useAsync: true);
+        return Convert.ToHexStringLower(await System.Security.Cryptography.MD5.HashDataAsync(stream, ct));
+    }
+
+    private string ResolveDestinationPath(string destinationPath)
+    {
+        if (string.IsNullOrWhiteSpace(destinationPath) || Path.IsPathRooted(destinationPath))
+        {
+            throw new ArgumentException("Der Zielpfad muss relativ und nicht leer sein.", nameof(destinationPath));
+        }
+
+        var candidate = Path.GetFullPath(Path.Combine(_destinationRoot, destinationPath));
+        var relativePath = Path.GetRelativePath(_destinationRoot, candidate);
+
+        if (relativePath == ".." ||
+            relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+            relativePath.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Der Zielpfad verlässt das konfigurierte Backup-Verzeichnis.", nameof(destinationPath));
+        }
+
+        RejectSymbolicLinkSegments(relativePath, candidate, destinationPath);
+
+        return candidate;
+    }
+
+    private void RejectSymbolicLinkSegments(
+        string relativePath,
+        string candidate,
+        string originalDestinationPath)
+    {
+        // Path.GetFullPath only performs a lexical containment check. Reject links below
+        // the configured root so an attacker cannot redirect generated hash directories
+        // (or the final file) outside the backup tree.
+        var currentPath = _destinationRoot;
+        var relativeDirectory = Path.GetDirectoryName(relativePath);
+        if (!string.IsNullOrEmpty(relativeDirectory))
+        {
+            foreach (var segment in relativeDirectory.Split(
+                         [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                         StringSplitOptions.RemoveEmptyEntries))
+            {
+                currentPath = Path.Combine(currentPath, segment);
+                if ((Directory.Exists(currentPath) || File.Exists(currentPath)) &&
+                    File.GetAttributes(currentPath).HasFlag(FileAttributes.ReparsePoint))
+                {
+                    throw new ArgumentException(
+                        "Der lokale Zielpfad enthält einen symbolischen Link.",
+                        nameof(originalDestinationPath));
+                }
+            }
+        }
+
+        if ((File.Exists(candidate) || Directory.Exists(candidate)) &&
+            File.GetAttributes(candidate).HasFlag(FileAttributes.ReparsePoint))
+        {
+            throw new ArgumentException(
+                "Das lokale Sicherungsziel ist ein symbolischer Link.",
+                nameof(originalDestinationPath));
+        }
     }
 }

@@ -6,10 +6,10 @@ namespace HashBackup.Utils;
 public static class SensitiveDataManager
 {
     private static readonly HashSet<string> Secrets = new(StringComparer.OrdinalIgnoreCase);
-    
+
     // Standard-Ersetzungstext für sensible Werte
     private const string SecretPlaceholder = "***SECRET***";
-    
+
     /// <summary>
     /// Fügt einen geheimen Schlüssel (z.B. API Key, Token, Passwort) hinzu, der in Logs und Ausgaben maskiert werden soll
     /// </summary>
@@ -21,7 +21,7 @@ public static class SensitiveDataManager
             Secrets.Add(secret);
         }
     }
-    
+
     /// <summary>
     /// Entfernt einen geheimen Schlüssel aus der Maskierungsliste
     /// </summary>
@@ -30,7 +30,7 @@ public static class SensitiveDataManager
     {
         Secrets.Remove(secret);
     }
-    
+
     /// <summary>
     /// Prüft, ob ein Text geheime Daten enthält, und maskiert diese
     /// </summary>
@@ -42,7 +42,7 @@ public static class SensitiveDataManager
         {
             return text;
         }
-        
+
         var result = text;
         foreach (var secret in Secrets)
         {
@@ -52,10 +52,10 @@ public static class SensitiveDataManager
                 result = result.Replace(secret, SecretPlaceholder);
             }
         }
-        
+
         return result;
     }
-    
+
     /// <summary>
     /// Gibt die Anzahl der registrierten geheimen Schlüssel zurück
     /// </summary>

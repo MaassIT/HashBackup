@@ -1,13 +1,4 @@
-FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/sdk:9.0-bookworm-slim AS build
-
-# Install required packages for compilation
-RUN apt-get update && apt-get install -y \
-    clang \
-    gcc \
-    g++ \
-    lld \
-    zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble-aot AS build
 
 WORKDIR /src
 
@@ -20,13 +11,12 @@ RUN dotnet restore HashBackup/HashBackup.csproj
 # Kopiere den restlichen Code nachdem die Abhängigkeiten wiederhergestellt wurden
 COPY . .
 
-# Build with ReadyToRun instead of AOT for better compatibility
+# Build the production Linux binary as a self-contained NativeAOT executable.
 RUN dotnet publish HashBackup/HashBackup.csproj \
     -c Release \
     -r linux-x64 \
     --self-contained true \
-    /p:PublishTrimmed=true \
-    /p:PublishReadyToRun=true \
+    /p:PublishAot=true \
     /p:PublishSingleFile=true \
     -o /app/publish
 
